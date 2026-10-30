@@ -1,0 +1,1546 @@
+package io.embodit.pruningclass.ui.pc.scene
+
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import com.pico.spatial.core.container.SpatialViewContent
+import com.pico.spatial.core.ecs.CollisionComponent
+import com.pico.spatial.core.ecs.DirectionalLightComponent
+import com.pico.spatial.core.ecs.Entity
+import com.pico.spatial.core.ecs.InteractableComponent
+import com.pico.spatial.core.ecs.SceneUpdateContext
+import com.pico.spatial.core.ecs.System
+import com.pico.spatial.core.ecs.TransformComponent
+import com.pico.spatial.core.ecs.ViewCoordinateSpace
+import com.pico.spatial.core.ecs.resource.Material
+import com.pico.spatial.core.ecs.resource.MeshResource
+import com.pico.spatial.core.ecs.resource.PhysicsMaterialResource
+import com.pico.spatial.core.ecs.resource.ShapeResource
+import com.pico.spatial.core.math.Quat
+import com.pico.spatial.core.math.Vector3
+import com.pico.spatial.ui.foundation.content.SpatialViewAttachments
+import com.pico.spatial.ui.foundation.gesture.SpatialDragValue
+import com.pico.spatial.ui.foundation.gesture.SpatialTapValue
+import io.embodit.pruningclass.domain.model.Quat4
+import io.embodit.pruningclass.domain.model.SurfaceKind
+import io.embodit.pruningclass.domain.model.Vec3
+import io.embodit.pruningclass.domain.tree.Cut
+import io.embodit.pruningclass.domain.tree.Judge
+import io.embodit.pruningclass.domain.tree.Label
+import io.embodit.pruningclass.domain.tree.LessonId
+import io.embodit.pruningclass.domain.tree.NextYear
+import io.embodit.pruningclass.domain.tree.Species
+import io.embodit.pruningclass.domain.tree.Status
+import io.embodit.pruningclass.domain.tree.Tree
+import io.embodit.pruningclass.domain.usecase.PlaceMachine
+import io.embodit.pruningclass.domain.usecase.Placement
+import io.embodit.pruningclass.domain.usecase.Upright
+import io.embodit.pruningclass.platform.PcGraph
+import io.embodit.pruningclass.platform.PcLog
+import io.embodit.pruningclass.platform.audio.Sfx
+import io.embodit.pruningclass.platform.sense.PlaneTracker
+import io.embodit.pruningclass.platform.tracking.HeadPose
+import io.embodit.pruningclass.ui.pc.PcEvent
+import io.embodit.pruningclass.ui.pc.PcUiState
+import io.embodit.pruningclass.ui.pc.Phase
+import io.embodit.pruningclass.ui.pc.TreeCache
+import io.embodit.pruningclass.ui.pc.View
+import io.embodit.pruningclass.ui.pc.debug.PcProbe
+import io.embodit.pruningclass.ui.theme.PcColors
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+/** The framework instantiates the system itself, so the running scene is reached through this holder. */
+internal object ActiveScene {
+    @Volatile var scene: PcScene? = null
+}
+
+/** The one per-frame ECS system: floor, placement, the stick, drags, the bud ladder, cuts, next year and the panels. */
+class PcFrameSystem : System() {
+    override fun update(context: SceneUpdateContext) {
+        ActiveScene.scene?.onFrame(context)
+    }
+}
+
+/**
+ * The 3D side of the app: the lesson tree (one entity per branch, meshes per wood, one bud mesh), the plant ring and its
+ * floor handle, the bud ladder, the cut preview, cut caps, falling pieces, review marks, next year's growth, the replant
+ * ghost, and where every pre-built panel stands. Compose state arrives through [render]; everything that moves is written
+ * in [onFrame]. The user's 3D input (taps on branches / buds / the preview, the stick, drags) goes back as events; nothing
+ * here changes the model directly. Mesh work is queued, at most two meshes per frame (factory ANR finding). Main thread only.
+ */
+class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
+
+    val panelShown = mutableStateMapOf<String, Boolean>()
+    val bindTick = mutableIntStateOf(0)
+
+    /** Localised words for 3D labels (set by the screen when the language changes). */
+    @Volatile var words: (String) -> String = { it }
+
+    private val main = Handler(Looper.getMainLooper())
+    private val head = PcGraph.head
+    private val controller = PcGraph.controller
+    private val planes = PcGraph.planes
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var buildJob: Job? = null
+
+    private var content: SpatialViewContent? = null
+    private var stageRoot: Entity? = null
+    private var shared: SharedResources? = null
+    private var m: PcMaterials? = null
+    private var ms: PcMeshes? = null
+    private var rig: PanelRig? = null
+    private var attached = false
+    private var sensing = false
+    private var panelsReported = false
+
+    private var ui = PcUiState()
+    private var pose = HeadPose(Vec3.ZERO, Quat4.IDENTITY)
+    private var hasHead = false
+    private var firstHeadMs = NEVER
+    private var lastFrameMs = 0L
+    private var lastFrameDtMs = 0L
+    private var lastHeadSentMs = 0L
+    private var blockSinceMs = NEVER
+    private var blockSent = false
+
+    // mesh / texture work queue (at most 2 per fast frame, 1 per 0.5 s when the emulator idles)
+    private val jobs = ArrayDeque<() -> Unit>()
+    private var lastQueueWarnMs = 0L
+    private var lastJobMs = 0L
+
+    // ---- the tree
+    private var treeRoot: Entity? = null
+    private var tree: Tree? = null
+    private var treeKey: Pair<LessonId, Int>? = null
+    private val branchViews = HashMap<Int, BranchView>()
+    private var budEntity: Entity? = null
+    private val potParts = ArrayList<Entity>()
+    private var treeBuilt = false
+    private var appliedCuts: List<Cut>? = null
+    private var appliedZoom: Boolean? = null
+    private var shownCuts: List<Cut> = emptyList()
+    private val caps = ArrayList<Entity>()
+    private val fallen = ArrayList<Triple<Entity, Long, Float>>()
+    private val wrongGhosts = ArrayList<Entity>()
+    private var lastCutCount = 0
+
+    // ---- placement
+    private var placed: Upright? = null
+    private var ringPose: Upright? = null
+    private var spin = 0f
+    private var spinFrom = 0f
+    private var spinTo = 0f
+    private var spinStartMs = NEVER
+    private var spinMs = 400f
+    private var placeSerialSeen = -1
+    private var fadeStartMs = NEVER
+    private var placedSent = true
+    private var floorY: Float? = null
+    private var floorVirtual = false
+    private var planesStartMs = NEVER
+    private var findingFor = -1
+    private var ring: Entity? = null
+    private var ringParts = ArrayList<Entity>()
+    private var handle: Entity? = null
+    private var grid: Entity? = null
+    private var ghost: Entity? = null
+    private val ghostParts = ArrayList<Entity>()
+    private var relocTriggerWas = false
+    private var floorCatcher: Entity? = null
+    private val placeMachine = PlaceMachine()
+
+    // ---- input
+    private var stickAxis = 0 // 0 none, 1 x, 2 y
+    private var stickRate = 0f
+    private var cursor: Int? = null
+    private var cursorArmed = true
+    private var triggerWas = false
+    private var cursorTapMs = 0L
+    private var turningSent = false
+    private var movingStickSent = false
+    private var drag: DragKind? = null
+    private var dragPxToM = 0.001f
+    private var insideSent = false
+    private var rotateSeen = 0
+    private var focusSeen = 0
+    private var hintSeen = 0
+    private var selectedSeen: Int? = null
+
+    private enum class DragKind { TREE, PANEL }
+
+    // ---- ladder / preview
+    private var ladderRoot: Entity? = null
+    private val ladderRings = ArrayList<Entity>()
+    private val ladderPlates = ArrayList<Entity>()
+    private val ladderLines = ArrayList<Strip>()
+    private val ladderBud = ArrayList<Int>()
+    private var ladderTag: Entity? = null
+    private var ladderWindow = 0
+    private var previewDisc: Entity? = null
+    private var scissors: Entity? = null
+
+    // ---- next year
+    private var nyRoot: Entity? = null
+    private var nyKey: String? = null
+    private var nyShown: View = View.NOW
+    private val nyLabels = ArrayList<Entity>()
+    private var nyFadeMs = NEVER
+
+    // ---- panels
+    private var shownPanel: String? = null
+    private var frontPose: Upright? = null
+    private var frontFor: String? = null
+    private var dockPose: Upright? = null
+    private var panelHandle: Entity? = null
+    private var explainLine: Strip? = null
+    private var explainSeen = -1
+    private var explainPose: Pair<Upright, Float>? = null
+    private var explainInViewMs = NEVER
+    private var explainTimeoutSent = -1
+    private var dialogPlaced = false
+    private var logTimes = longArrayOf(1_000L, 3_000L, 5_000L)
+    private var logIndex = 0
+
+    // =========================================================================================
+    // lifecycle
+    // =========================================================================================
+
+    fun attach(content: SpatialViewContent, attachments: SpatialViewAttachments) {
+        if (attached || stageRoot != null) detach()
+        val t0 = SystemClock.elapsedRealtime()
+        this.content = content
+        val root = Entity().named("stageRoot")
+        content.addEntity(root)
+        val offset = root.convertPositionFrom(Vector3.ZERO, null)
+        val rotation = root.convertRotationFrom(Quat.identity(), null)
+        root.components[TransformComponent::class.java]?.apply {
+            setPosition(offset)
+            setQuaternion(rotation)
+        }
+        stageRoot = root
+        val rig = PanelRig(root) { id, shown -> panelShown[id] = shown }
+        this.rig = rig
+        for (id in PanelSpec.pool) {
+            val (w, h) = PanelSpec.size(id)
+            rig.world(id, w, h).also { it.autoFace = false }
+        }
+        buildBackstop(root)
+        startSensing()
+        ActiveScene.scene = this
+        bindPanels(attachments)
+        buildJob =
+            scope.launch {
+                try {
+                    build(root, t0)
+                } catch (t: Throwable) {
+                    if (t !is CancellationException) PcLog.e("SCENE build failed: $t", t)
+                    throw t
+                }
+            }
+    }
+
+    /** Head tracking, the controller and the sound stream; plane detection only while a tree is being placed (D24). */
+    private fun startSensing() {
+        if (sensing) return
+        sensing = true
+        head.start()
+        controller.start()
+        PcGraph.sfx.start()
+    }
+
+    private fun stopSensing() {
+        if (!sensing) return
+        sensing = false
+        head.stop()
+        controller.stop()
+        stopPlanes()
+        PcGraph.sfx.stop()
+        hasHead = false
+    }
+
+    private fun startPlanes() {
+        if (planesStartMs != NEVER) return
+        planesStartMs = SystemClock.elapsedRealtime()
+        planes.start(PlaneTracker.Listener { _, _, _ -> })
+        PcLog.i("FLOOR planes started")
+    }
+
+    private fun stopPlanes() {
+        if (planesStartMs == NEVER) return
+        planesStartMs = NEVER
+        planes.stop()
+        PcLog.i("FLOOR planes stopped")
+    }
+
+    fun onBackground() {
+        stopSensing()
+        drag = null
+        PcLog.i("SENSING stopped (background)")
+    }
+
+    fun onForeground() {
+        if (stageRoot == null) return
+        startSensing()
+        PcLog.i("SENSING started (foreground)")
+    }
+
+    private suspend fun build(root: Entity, t0: Long) {
+        val sh = SharedResources()
+        shared = sh
+        val mats = PcMaterials(sh)
+        m = mats
+        val meshes = PcMeshes()
+        meshes.build(sh) { pace() }
+        ms = meshes
+        // wood materials (bark texture each) one at a time
+        for (w in io.embodit.pruningclass.domain.tree.Wood.entries) {
+            mats.wood(w)
+            pace()
+        }
+        val tr = Entity().named("treeRoot")
+        root.addChild(tr)
+        tr.enabled = false
+        treeRoot = tr
+        ring = Entity().named("plantRing").also { root.addChild(it); it.enabled = false }
+        ringParts += model(meshes.dashRing, mats.ring, "ring_dashes").also { ring!!.addChild(it) }
+        ringParts += model(meshes.band, mats.ring, "ring_line").also { ring!!.addChild(it) }
+        ringParts += model(meshes.arrow, mats.ring, "ring_arrow").also { ring!!.addChild(it) }
+        handle = model(meshes.ring, mats.handle, "floorHandle").also {
+            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createCapsule(0.06f, 0.6f).offsetByRotation(PLATE.sdk())), physicsMaterial = PhysicsMaterialResource()))
+            it.components.set(InteractableComponent())
+            root.addChild(it)
+            it.enabled = false
+        }
+        grid = model(meshes.dashRing, mats.grid, "virtualFloor").also { root.addChild(it); it.enabled = false }
+        ghost = Entity().named("replantGhost").also { g ->
+            root.addChild(g)
+            ghostParts += model(meshes.ring, mats.ghost, "ghost_ring").also { it.setLocal(scale = Vec3(0.6f, 1f, 0.6f)); g.addChild(it) }
+            ghostParts += model(meshes.cylinder, mats.ghost, "ghost_body").also { it.setLocal(scale = Vec3(0.25f, 1.2f, 0.25f)); g.addChild(it) }
+            g.enabled = false
+        }
+        floorCatcher = Entity().named("floorCatcher").also {
+            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(12f, 0.02f, 12f))), physicsMaterial = PhysicsMaterialResource()))
+            it.components.set(InteractableComponent())
+            root.addChild(it)
+            it.enabled = false
+        }
+        pace()
+        ladderRoot = Entity().named("ladder").also { root.addChild(it); it.enabled = false }
+        for (i in 0 until LADDER_POOL) {
+            val r = model(meshes.ring, mats.ladder, "ladder_ring_$i")
+            r.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createSphere(1f)), physicsMaterial = PhysicsMaterialResource()))
+            r.components.set(InteractableComponent())
+            ladderRoot!!.addChild(r)
+            r.enabled = false
+            ladderRings += r
+            val p = model(meshes.plate, mats.ladder, "ladder_plate_$i")
+            ladderRoot!!.addChild(p)
+            p.enabled = false
+            ladderPlates += p
+            ladderLines += Strip(ladderRoot!!, meshes.band, mats.ladderLine, "ladder_line_$i")
+            ladderBud += -1
+            if (i % 8 == 7) pace()
+        }
+        ladderTag = model(meshes.label, mats.ladder, "ladder_tag").also { ladderRoot!!.addChild(it); it.enabled = false }
+        previewDisc = model(meshes.disc, mats.preview, "preview_disc").also {
+            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createSphere(1.4f)), physicsMaterial = PhysicsMaterialResource()))
+            it.components.set(InteractableComponent())
+            root.addChild(it)
+            it.enabled = false
+        }
+        scissors = Entity().named("scissors").also { s ->
+            root.addChild(s)
+            for (k in 0 until 2) s.addChild(model(meshes.cube, mats.scissors, "blade_$k").also { it.setLocal(rotation = Quat4.axisAngle(Vec3(0f, 0f, 1f), (if (k == 0) 0.45f else -0.45f)), scale = Vec3(0.012f, 0.12f, 0.004f)) })
+            s.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(0.10f, 0.14f, 0.04f))), physicsMaterial = PhysicsMaterialResource()))
+            s.components.set(InteractableComponent())
+            s.enabled = false
+        }
+        panelHandle = model(meshes.cube, mats.handleBar, "panelHandle").also {
+            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1f, 2.5f, 3f))), physicsMaterial = PhysicsMaterialResource()))
+            it.components.set(InteractableComponent())
+            root.addChild(it)
+            it.enabled = false
+        }
+        explainLine = Strip(root, meshes.band, mats.explainLine, "explainLine")
+        root.addChild(Entity().named("keyLight").also {
+            it.components.set(DirectionalLightComponent(PcColors.White.color4(), 2500f, false))
+            it.setLocal(rotation = Quat4.fromTo(Vec3.AHEAD, Vec3(0.55f, -0.65f, -0.5f).normalized()))
+        })
+        attached = true
+        PcLog.i("SCENE attached build_ms=${SystemClock.elapsedRealtime() - t0}")
+        render(ui)
+    }
+
+    private suspend fun pace() {
+        delay(if (lastFrameDtMs in 1..FAST_FRAME_MS) 16L else 500L)
+    }
+
+    private fun buildBackstop(root: Entity) {
+        val shell = Entity().named("backstop")
+        root.addChild(shell)
+        val h = 6f
+        for ((c, size) in listOf(Vec3(h, 1.5f, 0f) to Vec3(0.2f, 2 * h, 2 * h), Vec3(-h, 1.5f, 0f) to Vec3(0.2f, 2 * h, 2 * h), Vec3(0f, 1.5f, h) to Vec3(2 * h, 2 * h, 0.2f), Vec3(0f, 1.5f, -h) to Vec3(2 * h, 2 * h, 0.2f), Vec3(0f, 1.5f + h, 0f) to Vec3(2 * h, 0.2f, 2 * h))) {
+            val slab = Entity().named("backstop")
+            slab.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(size.sdk())), physicsMaterial = PhysicsMaterialResource()))
+            slab.components.set(InteractableComponent())
+            shell.addChild(slab)
+            slab.setLocal(position = c)
+        }
+    }
+
+    fun bindPanels(attachments: SpatialViewAttachments) {
+        val rig = rig ?: return
+        if (!rig.bind(attachments, PanelSpec.pool, SystemClock.elapsedRealtime())) {
+            main.removeCallbacks(rebind)
+            main.postDelayed(rebind, 150L)
+        }
+    }
+
+    private val rebind = Runnable { if (stageRoot != null) bindTick.intValue++ }
+
+    fun detach() {
+        if (!attached && stageRoot == null) return
+        attached = false
+        buildJob?.cancel()
+        if (ActiveScene.scene === this) ActiveScene.scene = null
+        main.removeCallbacksAndMessages(null)
+        stopSensing()
+        panelShown.clear()
+        jobs.clear()
+        runCatching { rig?.release() }
+        runCatching { stageRoot?.destroy(true) }
+        shared?.close()
+        shared = null
+        stageRoot = null
+        treeRoot = null
+        branchViews.clear()
+        caps.clear()
+        fallen.clear()
+        wrongGhosts.clear()
+        ladderRings.clear()
+        ladderPlates.clear()
+        ladderLines.clear()
+        ladderBud.clear()
+        ringParts.clear()
+        potParts.clear()
+        nyLabels.clear()
+        tree = null
+        treeKey = null
+        treeBuilt = false
+        appliedCuts = null
+        rig = null
+        m = null
+        ms = null
+        PcLog.i("SCENE detached")
+    }
+
+    // =========================================================================================
+    // model -> scene
+    // =========================================================================================
+
+    fun render(state: PcUiState) {
+        ui = state
+        if (!attached) return
+        val key = state.lesson to state.treeSerial
+        if (key != treeKey && (state.phase.inLesson || state.phase == Phase.PLACING || state.phase == Phase.FINDING || state.phase == Phase.RELOCATING || state.phase == Phase.SETTINGS)) rebuildTree(state.lesson)
+        if (state.placeSerial != placeSerialSeen && state.phase == Phase.PLACING) placedSent = false
+    }
+
+    private fun rebuildTree(lesson: LessonId) {
+        val mats = m ?: return
+        val meshes = ms ?: return
+        val root = treeRoot ?: return
+        treeKey = lesson to ui.treeSerial
+        // tear down the old tree
+        jobs.clear()
+        branchViews.values.forEach { it.destroy() }
+        branchViews.clear()
+        runCatching { budEntity?.destroy(true) }
+        budEntity = null
+        potParts.forEach { runCatching { it.destroy(true) } }
+        potParts.clear()
+        caps.forEach { runCatching { it.destroy(true) } }
+        caps.clear()
+        wrongGhosts.forEach { runCatching { it.destroy(true) } }
+        wrongGhosts.clear()
+        ghostsFor = emptyList()
+        clearNextYear()
+        treeBuilt = false
+        appliedCuts = null
+        lastCutCount = ui.cuts.size
+        val t = TreeCache.get(lesson)
+        tree = t
+        PcLog.i("TREE build lesson=$lesson branches=${t.branches.size} selectable=${t.selectable.size}")
+        if (t.species == Species.ROSE) {
+            // stand 0.40 m (top 0.40 x 0.03 x 0.40, four legs) and the pot 0.35 x 0.30 m with soil, as in the mock-up
+            jobs += {
+                potParts += model(meshes.cube, mats.stand, "stand_top").also { it.setLocal(position = Vec3(0f, 0.385f, 0f), scale = Vec3(0.40f, 0.03f, 0.40f)); root.addChild(it) }
+                for ((x, z) in listOf(-1f to -1f, 1f to -1f, -1f to 1f, 1f to 1f)) potParts += model(meshes.cube, mats.stand, "stand_leg").also { it.setLocal(position = Vec3(x * 0.17f, 0.185f, z * 0.17f), scale = Vec3(0.03f, 0.37f, 0.03f)); root.addChild(it) }
+                potParts += model(meshes.cylinder, mats.pot, "pot").also { it.setLocal(position = Vec3(0f, 0.40f, 0f), scale = Vec3(0.165f, 0.30f, 0.165f)); root.addChild(it) }
+                potParts += model(meshes.disc, mats.soil, "soil").also { it.setLocal(position = Vec3(0f, 0.702f, 0f), scale = Vec3(0.16f, 1f, 0.16f)); root.addChild(it) }
+            }
+        }
+        // one entity per selectable / major branch; non-selectable ones are drawn with their parent
+        for (b in t.branches.filter { it.selectable || it.label == Label.MAJOR }) {
+            jobs += {
+                val v = BranchView(root, b)
+                branchViews[b.id] = v
+                v.setParts(TreeMesher.branch(t, b, null).map { (w, g) -> w to g.mesh("b${b.id}_$w") }, mats)
+                v.cutS = null
+            }
+        }
+        jobs += {
+            treeBuilt = true
+            PcLog.i("TREE built lesson=$lesson entities=${branchViews.size}")
+        }
+    }
+
+    /** Applies the cuts (and the bud zoom) to the branch meshes, the bud mesh and the caps. */
+    private fun applyCuts(cuts: List<Cut>, zoom: Boolean, feedback: Boolean) {
+        val t = tree ?: return
+        val mats = m ?: return
+        val meshes = ms ?: return
+        val root = treeRoot ?: return
+        val st = Judge.status(t, cuts)
+        val visible = HashMap<Int, Float?>()
+        for (b in t.branches) {
+            when (val s = st.getValue(b.id)) {
+                Status.Intact -> visible[b.id] = null
+                is Status.Cut -> if (s.bud > 0) visible[b.id] = b.cutS(s.bud)
+                is Status.Gone -> Unit
+            }
+        }
+        for ((id, v) in branchViews) {
+            val b = v.branch
+            val gone = !visible.containsKey(id)
+            v.holder.show(!gone)
+            v.gone = gone
+            if (gone) continue
+            val want = visible[id]
+            if (v.cutS != want) {
+                v.cutS = want
+                jobs += { v.setParts(TreeMesher.branch(t, b, want).map { (w, g) -> w to g.mesh("b${b.id}_${w}_c") }, mats) }
+            }
+        }
+        // buds: one mesh for the whole tree
+        jobs += {
+            runCatching { budEntity?.destroy(true) }
+            val g = TreeMesher.buds(t, visible, zoom)
+            budEntity = if (g.empty) null else model(g.mesh("buds"), if (t.species == Species.ROSE) mats.budRose else mats.budApple, "buds").also { root.addChild(it) }
+        }
+        // caps where a branch is cut (above a bud or at its base)
+        caps.forEach { runCatching { it.destroy(true) } }
+        caps.clear()
+        val newest = cuts.lastOrNull()
+        val review = ui.phase == Phase.RESULT
+        for (c in Judge.ownCuts(cuts)) {
+            val b = t[c.key] ?: continue
+            if (st[b.id] is Status.Gone) continue
+            val s = b.cutS(c.value)
+            val p = b.pointAt(s)
+            val n = b.tangentAt(s)
+            val r = b.radiusAt(s)
+            val mat =
+                when {
+                    ui.exam && !review -> mats.cap
+                    else -> capMaterial(t, cuts, b.id, mats)
+                }
+            caps += model(meshes.disc, mat, "cap_${b.id}").also {
+                it.setLocal(position = p, rotation = Quat4.fromTo(Vec3.UP, n), scale = Vec3(r * 1.05f, 1f, r * 1.05f))
+                root.addChild(it)
+            }
+        }
+        // a new cut: the piece falls (red when wrong in practice)
+        if (feedback && newest != null && cuts.size > lastCutCount) {
+            val b = t[newest.branch]
+            if (b != null) {
+                val wrong = !ui.exam && Judge.feedback(t, cuts, newest).first == 0f
+                val s = b.cutS(newest.bud)
+                jobs += {
+                    val g = TreeMesher.removed(t, b, s)
+                    if (!g.empty) {
+                        val e = model(g.mesh("fallen"), if (wrong) mats.fallenWrong else mats.wood(b.pieces.first().wood), "fallen")
+                        root.addChild(e)
+                        val dropBy = b.pointAt((s + b.length) / 2f).y - 0.05f
+                        fallen += Triple(e, SystemClock.elapsedRealtime(), dropBy)
+                    }
+                }
+            }
+        }
+        lastCutCount = cuts.size
+        appliedCuts = cuts
+        appliedZoom = zoom
+    }
+
+    private fun capMaterial(t: Tree, cuts: List<Cut>, branch: Int, mats: PcMaterials): Material {
+        val score = Judge.score(t, cuts)
+        if (score.wrongs.any { it.branch == branch }) return mats.capWrong
+        val target = score.targets.firstOrNull { branch in it.ids } ?: return mats.cap
+        return if (target.credit >= 1f) mats.capOk else mats.capOff
+    }
+
+    // =========================================================================================
+    // per frame
+    // =========================================================================================
+
+    fun onFrame(context: SceneUpdateContext) {
+        val root = stageRoot ?: return
+        if (root.scene == null || context.scene != root.scene) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastFrameMs != 0L) lastFrameDtMs = now - lastFrameMs
+        val dt = if (lastFrameMs == 0L) 0f else ((now - lastFrameMs) / 1000f).coerceIn(0f, 0.2f)
+        lastFrameMs = now
+        readHead(now)
+        val rig = rig ?: return
+        rig.onFrame(now)
+        if (hasHead) rig.stowBehind(pose.view)
+        reportPanels(rig)
+        pollBlock(now)
+        if (hasHead && now - lastHeadSentMs >= 100L) {
+            lastHeadSentMs = now
+            sink(PcEvent.HeadSample(pose.position, Placement.yawOf(pose.forward)))
+        }
+        runJobs(now)
+        if (!attached || !hasHead) {
+            placePanels(rig, now)
+            return
+        }
+        floorFrame(now)
+        placeFrame(now)
+        stickFrame(now, dt)
+        spinFrame(now)
+        treeFrame(now)
+        ladderFrame()
+        previewFrame()
+        fallenFrame(now)
+        nextYearFrame(now)
+        relocateFrame()
+        insideFrame()
+        placePanels(rig, now)
+        explainFrame(now)
+        launchLogs(now)
+    }
+
+    private fun runJobs(now: Long) {
+        if (jobs.isEmpty()) return
+        // a tree is ~50 jobs and a cut a few; hundreds means something re-queues every frame
+        if (jobs.size > 300 && now - lastQueueWarnMs > 5_000L) {
+            lastQueueWarnMs = now
+            PcLog.i("SCENE job queue ${jobs.size} (runaway?)")
+        }
+        val fast = lastFrameDtMs in 1..FAST_FRAME_MS
+        if (!fast && now - lastJobMs < SLOW_JOB_MS) return
+        var n = if (fast) 2 else 1
+        while (n-- > 0 && jobs.isNotEmpty()) {
+            val job = jobs.removeFirst()
+            runCatching { job() }.onFailure { PcLog.e("SCENE job failed: $it", it) }
+        }
+        lastJobMs = now
+    }
+
+    /** Head pose; an all-zero position (the tracker's first frames) is not a pose (factory finding on sign-hands). */
+    private fun readHead(now: Long) {
+        val p = head.pose() ?: return
+        if (p.position.length < 1e-4f) return
+        pose = p
+        if (!hasHead) {
+            hasHead = true
+            firstHeadMs = now
+        }
+    }
+
+    private fun reportPanels(rig: PanelRig) {
+        // again whenever the app is back at S00 ([Retry] on the blocked dialog), not only at launch
+        if (panelsReported && ui.phase != Phase.STARTING) return
+        if (PanelSpec.pool.all { rig[it]?.panel != null } && hasHead && SystemClock.elapsedRealtime() - firstHeadMs > HEAD_SETTLE_MS) {
+            panelsReported = true
+            sink(PcEvent.PanelsReady)
+        }
+    }
+
+    private fun pollBlock(now: Long) {
+        val reason = head.blockReason()
+        if (reason == null || ui.phase == Phase.BLOCKED || ui.debugHold) {
+            blockSinceMs = NEVER
+            if (ui.phase != Phase.BLOCKED) blockSent = false
+            return
+        }
+        if (blockSinceMs == NEVER) blockSinceMs = now
+        if (!blockSent && now - blockSinceMs >= 2_000L) {
+            blockSent = true
+            sink(PcEvent.BlockChanged(reason))
+        }
+    }
+
+    // ---- floor (design `rules.placement.floor`) -------------------------------------------
+
+    private fun virtualFloorY(): Float = pose.position.y - (if (ui.settings.seated) 1.20f else 1.60f) + ui.settings.floorOffset
+
+    private fun floorFrame(now: Long) {
+        val finding = ui.phase == Phase.FINDING
+        val retry = ui.phase == Phase.PLACING && floorVirtual && findingFor != ui.placeSerial
+        if (finding || retry) {
+            if (retry) findingFor = ui.placeSerial
+            startPlanes()
+        }
+        if (planesStartMs != NEVER) {
+            val floor = if (ui.debugNoFloor) null else planes.all.filter { it.kind == SurfaceKind.FLOOR }.minByOrNull { it.minY }
+            if (floor != null) {
+                val y = floor.minY
+                floorY = y
+                val wasVirtual = floorVirtual
+                floorVirtual = false
+                stopPlanes()
+                PcLog.i("FLOOR real y=${PcLog.f(y, 3)}")
+                sink(PcEvent.FloorFound(y, virtual = false))
+                if (wasVirtual) placed?.let { p -> placed = p.copy(position = Vec3(p.position.x, y, p.position.z)); ringPose = placed }
+            } else if (now - planesStartMs >= FLOOR_TIMEOUT_MS && !(ui.debugHold && finding)) {
+                stopPlanes()
+                if (finding || floorY == null) {
+                    floorVirtual = true
+                    floorY = virtualFloorY()
+                    PcLog.i("FLOOR virtual y=${PcLog.f(floorY!!, 3)}")
+                    sink(PcEvent.FloorFound(floorY!!, virtual = true))
+                }
+            }
+        }
+        // the virtual floor follows "floor height" / "seated"
+        if (floorVirtual && floorY != null) {
+            val y = virtualFloorY()
+            if (abs(y - floorY!!) > 0.002f) {
+                floorY = y
+                placed?.let { p -> placed = p.copy(position = Vec3(p.position.x, y, p.position.z)) }
+                ringPose?.let { p -> ringPose = p.copy(position = Vec3(p.position.x, y, p.position.z)) }
+            }
+        }
+    }
+
+    // ---- placement (design `rules.placement.autoPlace`) -----------------------------------
+
+    private fun distances(t: Tree): Pair<Float, Float> = if (t.species == Species.ROSE) 1.10f to 2.00f else 2.00f to 3.20f
+
+    private fun placeFrame(now: Long) {
+        val t = tree ?: return
+        // the model may already be past S04 (a debug jump, a fast replay): place once for this serial anyway
+        if (floorY == null && ui.floorReady) {
+            floorY = virtualFloorY()
+            floorVirtual = ui.virtualFloor
+        }
+        val wantsPlace = ui.phase == Phase.PLACING || ui.phase.inLesson
+        if (wantsPlace && ui.placeSerial != placeSerialSeen && floorY != null && treeBuilt) {
+            placeSerialSeen = ui.placeSerial
+            val p = Placement.treeAhead(pose.position, pose.forward, distances(t).first, floorY!!)
+            placed = p
+            ringPose = p
+            placeMachine.set(p.position)
+            spin = 0f
+            spinStartMs = NEVER
+            fadeStartMs = now
+            dockPanel()
+            PcLog.i("PC-PLACE tree=${PcLog.pos(p.position)} yaw=${PcLog.f(Math.toDegrees(p.yaw.toDouble()).toFloat(), 1)} head=${PcLog.pos(pose.position)} dist=${PcLog.f(distances(t).first)} floorY=${PcLog.f(floorY!!, 3)} virtual=$floorVirtual")
+            logIndex = 0
+            placedAtMs = now
+        }
+        if (!placedSent && ui.phase == Phase.PLACING && fadeStartMs != NEVER && now - fadeStartMs >= FADE_MS && placeSerialSeen == ui.placeSerial) {
+            placedSent = true
+            sink(PcEvent.Placed)
+        }
+    }
+
+    private var placedAtMs = NEVER
+
+    private fun dockPanel() {
+        val p = placed ?: return
+        dockPose = if (qaDockFront) Placement.dockPanel(pose.position, p.position, distance = 0.6f, leftDeg = 0f) else Placement.dockPanel(pose.position, p.position)
+    }
+
+    /** Tree transform: placement + the user's spin; visible / faded by state. */
+    private fun treeFrame(now: Long) {
+        val tr = treeRoot ?: return
+        val p = placed
+        val t = tree
+        val showTree = p != null && t != null && treeBuilt && when (ui.phase) {
+            Phase.PLACING, Phase.RULES, Phase.PRUNING, Phase.RESULT, Phase.GRADUATED, Phase.RELOCATING -> true
+            Phase.SETTINGS, Phase.RULE_CARD -> ui.back.inLesson
+            else -> false
+        }
+        tr.show(showTree)
+        val r = ring
+        val h = handle
+        if (!showTree || p == null) {
+            r?.show(false)
+            h?.show(false)
+            grid?.show(false)
+            return
+        }
+        tr.setLocal(position = p.position, rotation = Quat4.axisAngle(Vec3.UP, p.yaw + spin))
+        var opacity = 1f
+        if (fadeStartMs != NEVER) {
+            opacity = ((now - fadeStartMs) / FADE_MS).coerceIn(0f, 1f)
+            if (opacity >= 1f) fadeStartMs = NEVER
+        }
+        if (ui.phase == Phase.RULES || ui.phase == Phase.GRADUATED || ui.phase == Phase.RULE_CARD || ui.inside) opacity *= 0.3f
+        if (nyFadeMs != NEVER) opacity *= nyFadeOpacity(now)
+        tr.fade(opacity)
+        // the cuts as the model says (the "model" next-year view shows the model answer)
+        val wantCuts = if (ui.phase == Phase.RESULT && ui.view == View.MODEL) Judge.model(t) else ui.cuts
+        if (treeBuilt && (wantCuts != appliedCuts || ui.settings.budZoom != appliedZoom)) applyCuts(wantCuts, ui.settings.budZoom, feedback = ui.phase == Phase.PRUNING)
+        tintFrame(t)
+        // plant ring (stays where the tree was placed) and the floor handle (under the tree)
+        val rp = ringPose ?: p
+        val rose = t.species == Species.ROSE
+        val ringR = if (rose) 0.30f else 0.60f
+        r?.show(true)
+        r?.setLocal(position = rp.position + Vec3(0f, 0.002f, 0f), rotation = Quat4.axisAngle(Vec3.UP, rp.yaw))
+        ringParts.getOrNull(0)?.setLocal(scale = Vec3(ringR, 1f, ringR))
+        ringParts.getOrNull(1)?.setLocal(position = Vec3(0f, 0.001f, ringR), rotation = Quat4.axisAngle(Vec3.RIGHT, -(Math.PI / 2).toFloat()) * Quat4.axisAngle(Vec3(0f, 0f, 1f), (Math.PI / 2).toFloat()), scale = Vec3(0.12f, 0.02f, 1f))
+        ringParts.getOrNull(2)?.setLocal(position = Vec3(0f, 0.001f, ringR + 0.12f), scale = Vec3(0.05f, 1f, 0.05f))
+        val onRing = rp.position.distanceTo(p.position) < 0.02f && drag == null && !movingStick
+        val ringMat = if (now < snapFlashUntil) m?.ringOk else if (onRing) m?.ringDim else m?.ring
+        ringMat?.let { mat -> ringParts.forEach { it.setMaterial(mat) } }
+        val hOuter = if (rose) 0.50f else 0.60f
+        h?.show(ui.phase == Phase.PRUNING || ui.phase == Phase.RESULT)
+        h?.setLocal(position = p.position + Vec3(0f, 0.004f, 0f), scale = Vec3(hOuter, 1f, hOuter))
+        grid?.show(floorVirtual)
+        grid?.setLocal(position = Vec3(pose.position.x, (floorY ?: 0f) + 0.001f, pose.position.z), scale = Vec3(1.5f, 1f, 1.5f))
+    }
+
+    private var snapFlashUntil = 0L
+    private var ghostsFor: List<Int> = emptyList()
+    private var movingStick = false
+
+    /** Hints / review marks / the selection, by material swap (design `hint`, `review`, S07). */
+    private fun tintFrame(t: Tree) {
+        val mats = m ?: return
+        val review = ui.phase == Phase.RESULT && ui.view == View.NOW
+        val st = Judge.status(t, ui.cuts)
+        for ((id, v) in branchViews) {
+            val b = v.branch
+            val uncutMust = b.label == Label.MUST && st[id] == Status.Intact
+            val mat =
+                when {
+                    ui.selected == id && ui.phase == Phase.PRUNING -> mats.selected
+                    (ui.hints && ui.phase == Phase.PRUNING || review) && uncutMust && (ui.phase != Phase.RESULT || ui.view == View.NOW) -> mats.hint
+                    else -> null
+                }
+            v.tint(mat, mats)
+            v.holder.fade(if (ui.selected != null && ui.selected != id && ui.phase == Phase.PRUNING) 0.7f else 1f)
+        }
+        // wrong cuts come back as red ghosts in the review
+        // keyed on what is wanted, not on how many exist: the ghosts are built later by queued jobs
+        val wantGhosts = if (review) ui.score?.wrongs?.map { it.branch }.orEmpty() else emptyList()
+        if (wantGhosts != ghostsFor) {
+            ghostsFor = wantGhosts
+            wrongGhosts.forEach { runCatching { it.destroy(true) } }
+            wrongGhosts.clear()
+            val root = treeRoot ?: return
+            for (id in wantGhosts) {
+                val b = t[id] ?: continue
+                val k = Judge.ownCuts(ui.cuts)[id] ?: continue
+                jobs += job@{
+                    if (id !in ghostsFor) return@job
+                    val g = TreeMesher.removed(t, b, b.cutS(k))
+                    if (!g.empty) wrongGhosts += model(g.mesh("ghost_$id"), mats.wrongGhost, "wrongGhost").also { root.addChild(it) }
+                }
+            }
+        }
+    }
+
+    // ---- the stick (design `rules.placement.rotate` / `distance`, `judge.budCursor`) ------
+
+    private fun stickFrame(now: Long, dt: Float) {
+        val allowed = ui.phase in setOf(Phase.PRUNING, Phase.RESULT) && drag == null && placed != null
+        // the controller's back key (B / Y) leaves the selection like a tap on empty space (design S07 / budCursor)
+        if (controller.takeBackPresses() > 0 && allowed && ui.selected != null) sink(PcEvent.TappedElsewhere)
+        val sample = if (allowed) controller.sample() else null
+        val x = sample?.stickX ?: 0f
+        val y = sample?.stickY ?: 0f
+        // axis lock: the first axis past the dead zone wins until both are back in the middle
+        if (abs(x) < DEAD && abs(y) < DEAD) stickAxis = 0
+        else if (stickAxis == 0) stickAxis = if (abs(x) >= abs(y)) 1 else 2
+        // X: turn about the trunk, right = clockwise seen from above (yaw down)
+        val wanted = if (stickAxis == 1) -(if (x > 0) 1f else -1f) * (abs(x) - DEAD) / (1f - DEAD) * TURN_RATE else 0f
+        if (wanted != 0f) stickRate = wanted
+        else if (stickRate != 0f) {
+            val step = TURN_RATE / 0.2f * dt
+            stickRate = if (abs(stickRate) <= step) 0f else stickRate - step * (if (stickRate > 0) 1f else -1f)
+        }
+        if (stickRate != 0f) {
+            spin += stickRate * dt
+            spinStartMs = NEVER
+        }
+        val turning = stickRate != 0f
+        if (turning != turningSent) {
+            turningSent = turning
+            sink(PcEvent.Turning(turning))
+        }
+        // Y: the bud cursor while a branch is selected, else push / pull the tree
+        val t = tree ?: return
+        val sel = ui.selected?.let { t[it] }
+        var moving = false
+        if (stickAxis == 2 && sel != null) {
+            if (cursorArmed && abs(y) > 0.6f) {
+                cursorArmed = false
+                val n = sel.buds.size
+                val c = (cursor ?: ui.preview ?: 0) + (if (y > 0) 1 else -1)
+                cursor = c.coerceIn(0, n)
+                PcLog.i("CURSOR bud=$cursor")
+            }
+        } else if (stickAxis == 2) {
+            val p = placed
+            if (p != null) {
+                val (lo, hi) = distances(t)
+                val dir = Vec3(p.position.x - pose.position.x, 0f, p.position.z - pose.position.z)
+                val d = dir.length
+                if (d > 1e-3f) {
+                    val nd = (d + (if (y > 0) 1f else -1f) * ((abs(y) - DEAD) / (1f - DEAD)) * 0.5f * dt).coerceIn(lo, hi)
+                    val np = pose.position.let { Vec3(it.x, 0f, it.z) } + dir.normalized() * nd
+                    placed = p.copy(position = Vec3(np.x, p.position.y, np.z))
+                    moving = true
+                }
+            }
+        }
+        if (abs(y) < 0.3f) cursorArmed = true
+        movingStick = moving
+        if (moving != movingStickSent) {
+            movingStickSent = moving
+            sink(PcEvent.Moving(moving))
+            if (!moving) dockPanel()
+        }
+        // trigger with the cursor: first press previews, the second cuts (same as tapping the ring twice)
+        val pressed = sample?.pressed == true
+        if (pressed && !triggerWas && sel != null && cursor != null) {
+            cursorTapMs = now
+            sink(PcEvent.BudTapped(sel.id, cursor!!))
+        }
+        triggerWas = pressed
+    }
+
+    /** Animated turns: the 45-degree buttons, turning a branch to the user (hint, review row, selecting a branch around the back). */
+    private fun spinFrame(now: Long) {
+        val t = tree ?: return
+        fun turnTo(target: Float, ms: Float) {
+            spinFrom = spin
+            spinTo = spin + Placement.angle(target - spin)
+            spinStartMs = now
+            spinMs = ms
+        }
+        if (ui.rotateSerial != rotateSeen) {
+            rotateSeen = ui.rotateSerial
+            spinFrom = spin
+            spinTo = spin - Placement.rad(ui.rotateBy)
+            spinStartMs = now
+            spinMs = 400f
+        }
+        fun facing(id: Int?): Float? {
+            val b = id?.let { t[it] } ?: return null
+            val mid = b.pointAt(b.length * 0.5f)
+            return -atan2(mid.x, mid.z)
+        }
+        if (ui.focusSerial != focusSeen) {
+            focusSeen = ui.focusSerial
+            facing(ui.focusBranch)?.let { turnTo(it, 600f) }
+        }
+        if (ui.hintSerial != hintSeen) {
+            hintSeen = ui.hintSerial
+            facing(ui.explain?.branch)?.let { turnTo(it, 600f) }
+        }
+        if (ui.selected != selectedSeen) {
+            selectedSeen = ui.selected
+            cursor = null
+            ladderWindow = 0
+            val f = facing(ui.selected)
+            if (f != null && abs(Placement.angle(f - spin)) > Placement.rad(60f)) turnTo(f, 600f)
+        }
+        if (spinStartMs != NEVER) {
+            val q = ((now - spinStartMs) / spinMs).coerceIn(0f, 1f)
+            spin = spinFrom + (spinTo - spinFrom) * Ease.inOutCubic(q)
+            if (q >= 1f) spinStartMs = NEVER
+        }
+    }
+
+    // ---- bud ladder (design `rules.judge.budLadder`) ---------------------------------------
+
+    private fun treeToWorld(local: Vec3): Vec3 {
+        val p = placed ?: return local
+        return p.position + Quat4.axisAngle(Vec3.UP, p.yaw + spin).rotate(local)
+    }
+
+    private fun ladderFrame() {
+        val lr = ladderRoot ?: return
+        val mats = m ?: return
+        val t = tree
+        val sel = ui.selected?.let { t?.get(it) }
+        if (sel == null || ui.phase != Phase.PRUNING || t == null) {
+            lr.show(false)
+            return
+        }
+        lr.show(true)
+        val mid = treeToWorld(sel.pointAt(sel.length * 0.5f))
+        val toUser = Vec3(pose.position.x - mid.x, 0f, pose.position.z - mid.z).normalized()
+        val right = Vec3.UP.cross(toUser).normalized()
+        val column = mid + toUser * 0.16f + right * 0.06f
+        val dist = column.distanceTo(pose.position)
+        val dia = (dist * 0.0314f).coerceAtLeast(0.03f)
+        val gap = dia * 1.25f
+        // entries: base (0) then buds; at most 16 shown, the rest by "more" rings
+        val all = listOf(0) + sel.buds.map { it.index }
+        val window = if (all.size <= MAX_RINGS) all else all.drop(ladderWindow).take(MAX_RINGS - 2)
+        val entries = ArrayList<Int>()
+        if (all.size > MAX_RINGS) entries += MORE_DOWN
+        entries += window
+        if (all.size > MAX_RINGS) entries += MORE_UP
+        val baseY = column.y - (entries.size - 1) * gap / 2f
+        val yaw = atan2(toUser.x, toUser.z)
+        val face = Quat4.axisAngle(Vec3.UP, yaw)
+        for (i in 0 until LADDER_POOL) {
+            val r = ladderRings[i]
+            val pl = ladderPlates[i]
+            val line = ladderLines[i]
+            if (i >= entries.size) {
+                r.show(false)
+                pl.show(false)
+                line.hide()
+                ladderBud[i] = -1
+                continue
+            }
+            val k = entries[i]
+            ladderBud[i] = k
+            val at = Vec3(column.x, baseY + i * gap, column.z)
+            val active = (ui.preview == k && k >= 0) || cursor == k
+            r.show(true)
+            r.setMaterial(if (active) mats.ladderActive else mats.ladder)
+            r.setLocal(position = at, rotation = face * PLATE, scale = Vec3(dia / 2f, 1f, dia / 2f))
+            val text = when (k) {
+                0 -> "✕"
+                MORE_UP -> "+"
+                MORE_DOWN -> "-"
+                else -> k.toString()
+            }
+            val plateMat = if (ui.testTexture) mats.testF() else mats.text("n_$text", text, pill = false)
+            if (plateMat != null) pl.setMaterial(plateMat)
+            pl.show(true)
+            pl.setLocal(position = at + toUser * 0.002f, rotation = face, scale = Vec3(dia * 0.72f, dia * 0.72f, 1f))
+            if (k > 0) {
+                val bud = sel.buds.first { it.index == k }
+                line.draw(at - right * (dia / 2f), treeToWorld(bud.pos), 0.001f, toUser)
+            } else if (k == 0) {
+                line.draw(at - right * (dia / 2f), treeToWorld(sel.points.first()), 0.001f, toUser)
+            } else line.hide()
+        }
+        // the tag over the column: what to do now
+        val tag = ladderTag ?: return
+        val key = if (ui.preview != null) "ladder_confirm" else "ladder_pick"
+        val word = words(key)
+        mats.text("tag_${key}_$word", word, pill = true)?.let { tag.setMaterial(it) }
+        tag.show(true)
+        val w = dia * 4f
+        tag.setLocal(position = Vec3(column.x, baseY + entries.size * gap + dia * 0.4f, column.z), rotation = face, scale = Vec3(w, w, 1f))
+    }
+
+    // ---- cut preview (design `entities3d.cutPreview`) --------------------------------------
+
+    private fun previewFrame() {
+        val disc = previewDisc ?: return
+        val sc = scissors ?: return
+        val t = tree
+        val b = ui.selected?.let { t?.get(it) }
+        val k = ui.preview
+        if (b == null || k == null || ui.phase != Phase.PRUNING) {
+            disc.show(false)
+            sc.show(false)
+            return
+        }
+        val s = b.cutS(k)
+        val p = treeToWorld(b.pointAt(s))
+        val tan = Quat4.axisAngle(Vec3.UP, (placed?.yaw ?: 0f) + spin).rotate(b.tangentAt(s))
+        val away = if (k > 0) Quat4.axisAngle(Vec3.UP, (placed?.yaw ?: 0f) + spin).rotate(b.buds.first { it.index == k }.dir) else Vec3.UP
+        val n = (tan - away.rejectFrom(tan).normalized() * 0.9f).normalized() // 45 degrees, sloping away from the bud
+        val r = (b.radiusAt(s) * 1.6f).coerceAtLeast(0.008f)
+        disc.show(true)
+        disc.setLocal(position = p, rotation = Quat4.fromTo(Vec3.UP, n), scale = Vec3(r, 1f, r))
+        // scissors ghost beside the ladder, not over the rings
+        val toUser = Vec3(pose.position.x - p.x, 0f, pose.position.z - p.z).normalized()
+        val right = Vec3.UP.cross(toUser).normalized()
+        sc.show(true)
+        sc.setLocal(position = p + toUser * 0.12f + right * 0.22f, rotation = Quat4.axisAngle(Vec3.UP, atan2(toUser.x, toUser.z)))
+    }
+
+    // ---- falling pieces --------------------------------------------------------------------
+
+    private fun fallenFrame(now: Long) {
+        val it = fallen.iterator()
+        while (it.hasNext()) {
+            val (e, start, dropBy) = it.next()
+            val age = (now - start) / 1000f
+            if (age > 2.6f) {
+                runCatching { e.destroy(true) }
+                it.remove()
+                continue
+            }
+            val q = (age / 0.6f).coerceIn(0f, 1f)
+            e.setLocal(position = Vec3(0f, -dropBy * q * q, 0.05f * q), rotation = Quat4.axisAngle(Vec3.RIGHT, 0.6f * q))
+            e.fade(if (age < 0.6f) 1f else (1f - (age - 0.6f) / 2f).coerceIn(0f, 1f))
+        }
+    }
+
+    // ---- next year (design `rules.nextYear`) -----------------------------------------------
+
+    private fun clearNextYear() {
+        runCatching { nyRoot?.destroy(true) }
+        nyRoot = null
+        nyKey = null
+        nyLabels.clear()
+    }
+
+    private fun nyFadeOpacity(now: Long): Float {
+        val q = ((now - nyFadeMs) / 1200f).coerceIn(0f, 1f)
+        if (q >= 1f) nyFadeMs = NEVER
+        return if (q < 0.5f) 1f - q * 2f else (q - 0.5f) * 2f
+    }
+
+    private fun nextYearFrame(now: Long) {
+        val t = tree ?: return
+        val mats = m ?: return
+        val meshes = ms ?: return
+        val root = treeRoot ?: return
+        val view = if (ui.phase == Phase.RESULT) ui.view else View.NOW
+        if (view != nyShown) {
+            nyShown = view
+            nyFadeMs = now
+        }
+        if (view == View.NOW) {
+            nyRoot?.show(false)
+            return
+        }
+        val cuts = if (view == View.MODEL) Judge.model(t) else ui.cuts
+        val key = "${t.lesson}|$view|${cuts.hashCode()}|${ui.english}"
+        if (key != nyKey) {
+            clearNextYear()
+            nyKey = key
+            val ny = NextYear(t, cuts)
+            val r = Entity().named("nextYear")
+            root.addChild(r)
+            nyRoot = r
+            PcLog.i("PC-NEXT view=$view counts=${ny.counts}")
+            val (wood, leaves, flowers) = TreeMesher.nextYear(ny.shoots, ny.blossoms.map { it.pos to it.half }, t.species)
+            PcLog.i("PC-NEXT mesh shoots=${ny.shoots.size} blossoms=${ny.blossoms.size} verts wood=${wood.pos.size} leaves=${leaves.pos.size} flowers=${flowers.pos.size}")
+            jobs += { if (!wood.empty) r.addChild(model(wood.mesh("ny_wood"), mats.young, "ny_wood")) }
+            jobs += { if (!leaves.empty) r.addChild(model(leaves.mesh("ny_leaves"), mats.leaf, "ny_leaves")) }
+            jobs += { if (!flowers.empty) r.addChild(model(flowers.mesh("ny_flowers"), if (t.species == Species.ROSE) mats.bloomRose else mats.bloomApple, "ny_flowers")) }
+            for (l in ny.labels.distinctBy { it.key + (it.pos.x * 10).toInt() }.take(8)) {
+                jobs += {
+                    val word = words("label_${l.key}")
+                    val mat = if (ui.testTexture) mats.testF() else mats.text("label_${l.key}_$word", word, pill = true)
+                    if (mat != null) {
+                        val e = model(meshes.label, mat, "ny_label")
+                        r.addChild(e)
+                        e.setLocal(position = l.pos + Vec3(0f, 0.12f, 0f), scale = Vec3(0.24f, 0.24f, 1f))
+                        nyLabels += e
+                    }
+                }
+            }
+        }
+        nyRoot?.show(true)
+        // labels billboard about the vertical (in tree space: undo the tree's turn)
+        val treeYaw = (placed?.yaw ?: 0f) + spin
+        for (l in nyLabels) {
+            val w = treeToWorld(runCatching { l.convertPositionTo(Vector3.ZERO, root).domain() }.getOrNull() ?: continue)
+            val yawTo = atan2(pose.position.x - w.x, pose.position.z - w.z)
+            l.setLocal(rotation = Quat4.axisAngle(Vec3.UP, yawTo - treeYaw))
+        }
+    }
+
+    // ---- replanting (S20, design `rules.placement.relocate`) -------------------------------
+
+    private fun relocateFrame() {
+        val g = ghost ?: return
+        val fc = floorCatcher ?: return
+        val t = tree
+        if (ui.phase != Phase.RELOCATING || t == null || floorY == null) {
+            if (placeMachine.mode == PlaceMachine.Mode.PLACING) placeMachine.cancel()
+            g.show(false)
+            fc.show(false)
+            return
+        }
+        if (placeMachine.mode == PlaceMachine.Mode.LOCKED) placeMachine.replant()
+        fc.show(true)
+        fc.setLocal(position = Vec3(pose.position.x, floorY!! - 0.01f, pose.position.z))
+        val sample = controller.sample()
+        val ray = sample?.ray
+        var hit: Vec3? = null
+        if (ray != null && ray.direction.y < -0.05f) {
+            val d = (floorY!! - ray.origin.y) / ray.direction.y
+            if (d in 0f..10f) hit = ray.origin + ray.direction * d
+        }
+        placeMachine.aim(hit ?: placeMachine.ghost)
+        val gp = placeMachine.ghost
+        if (gp == null) {
+            g.show(false)
+        } else {
+            val ok = allowedSpot(t, gp)
+            g.show(true)
+            g.setLocal(position = gp, rotation = Quat4.axisAngle(Vec3.UP, Placement.yawOf(gp - pose.position) + Math.PI.toFloat()))
+            val mat = if (ok) m?.ghost else m?.ghostBad
+            mat?.let { mm -> ghostParts.forEach { it.setMaterial(mm) } }
+            val pressed = sample?.pressed == true
+            if (pressed && !relocTriggerWas) dropGhost(t)
+        }
+        relocTriggerWas = sample?.pressed == true
+    }
+
+    private fun allowedSpot(t: Tree, at: Vec3): Boolean {
+        val d = Vec3(at.x - pose.position.x, 0f, at.z - pose.position.z).length
+        return d - t.crownRadius >= clearance(t)
+    }
+
+    private fun clearance(t: Tree): Float = if (t.species == Species.ROSE) 0.6f else 0.8f
+
+    private fun dropGhost(t: Tree) {
+        val at = placeMachine.ghost ?: return
+        if (!placeMachine.drop(allowedSpot(t, at))) return
+        val yaw = Placement.yawOf(Vec3(at.x - pose.position.x, 0f, at.z - pose.position.z))
+        placed = Upright(Vec3(at.x, floorY ?: at.y, at.z), yaw)
+        ringPose = placed
+        spin = 0f
+        dockPanel()
+        PcLog.i("PC-PLACE replant tree=${PcLog.pos(placed!!.position)}")
+        sink(PcEvent.Replanted)
+    }
+
+    // ---- inside the crown (S21) ------------------------------------------------------------
+
+    private fun insideFrame() {
+        val t = tree ?: return
+        val p = placed ?: return
+        val inLesson = ui.phase.inLesson || ui.phase == Phase.PLACING
+        val horiz = Vec3(pose.position.x - p.position.x, 0f, pose.position.z - p.position.z).length
+        val inside = inLesson && horiz < t.crownRadius * 0.9f && pose.position.y < p.position.y + t.height + 0.1f
+        if (inside != insideSent) {
+            insideSent = inside
+            sink(PcEvent.Inside(inside))
+        }
+    }
+
+    // =========================================================================================
+    // panels (design `rules.panelFollow`: docked and locked, draggable, never following the head)
+    // =========================================================================================
+
+    private fun panelFor(s: PcUiState): Pair<String, Boolean> =
+        when (s.phase) {
+            Phase.WELCOME -> PanelSpec.WELCOME to false
+            Phase.PICKER -> PanelSpec.PICKER to false
+            Phase.RULES -> PanelSpec.RULES to false
+            Phase.GRADUATED, Phase.RULE_CARD -> PanelSpec.CARD to false
+            Phase.RESULT -> PanelSpec.RESULT to true
+            Phase.SETTINGS -> PanelSpec.SETTINGS to (s.back.inLesson && dockPose != null)
+            Phase.BLOCKED -> PanelSpec.DIALOG to false
+            Phase.PRUNING, Phase.RELOCATING -> PanelSpec.CONTROL to true
+            Phase.PLACING -> PanelSpec.CONTROL to (dockPose != null && placed != null)
+            else -> PanelSpec.CONTROL to false
+        }
+
+    private fun placePanels(rig: PanelRig, now: Long) {
+        if (!hasHead) return
+        val (id, docked) = panelFor(ui)
+        val k = PanelSpec.M_PER_DP
+        val pose: Upright
+        if (docked && dockPose != null) {
+            val d = dockPose!!
+            // contents taller than the control panel hang from its top edge
+            val (_, h) = PanelSpec.size(id)
+            val ctrlH = PanelSpec.size(PanelSpec.CONTROL).second
+            pose = d.copy(position = d.position - Vec3(0f, (h - ctrlH) * k / 2f, 0f))
+        } else {
+            val front = frontFor
+            val dist = when (id) {
+                PanelSpec.RULES -> 0.7f
+                PanelSpec.DIALOG -> 0.6f
+                else -> 0.8f
+            }
+            val below = if (id == PanelSpec.DIALOG) 5f else 12f
+            val fp = frontPose
+            // placed once when it appears; again only if it ended up more than 70 degrees off the view (factory rule 2026-10-29)
+            val off = fp?.let { abs(Placement.angle(Placement.yawOf(it.position - this.pose.position) - Placement.yawOf(this.pose.forward))) } ?: 0f
+            if (front != id || fp == null || off > Placement.rad(70f) && !ui.debugHold) {
+                frontFor = id
+                frontPose = Placement.placeUpright(this.pose.position, this.pose.forward, dist, below)
+                PcLog.i("PANEL front id=$id at=${PcLog.pos(frontPose!!.position)}")
+            }
+            pose = frontPose!!
+        }
+        if (shownPanel != id) {
+            shownPanel?.let { rig[it]?.hide() }
+            shownPanel = id
+            PcLog.i("PANEL show id=$id docked=$docked")
+        }
+        rig[id]?.place(pose.position, pose.rotation, PanelSpec.SCALE)
+        for (other in PanelSpec.pool) if (other != id && other != PanelSpec.EXPLAIN) rig[other]?.hide()
+        // drag handle bar on the top edge of a docked panel
+        val bar = panelHandle
+        if (bar != null) {
+            if (docked && dockPose != null) {
+                val (w, h) = PanelSpec.size(id)
+                val top = pose.position + pose.rotation.rotate(Vec3(0f, h * k / 2f + 0.012f, 0.002f))
+                bar.show(true)
+                bar.setLocal(position = top, rotation = pose.rotation, scale = Vec3(w * k * 0.35f, 0.008f, 0.006f))
+            } else bar.show(false)
+        }
+        dialogPlaced = id == PanelSpec.DIALOG
+    }
+
+    private fun explainFrame(now: Long) {
+        val rig = rig ?: return
+        val slot = rig[PanelSpec.EXPLAIN] ?: return
+        val e = ui.explain
+        val t = tree
+        val line = explainLine
+        if (e == null || t == null || placed == null || !(ui.phase == Phase.PRUNING || ui.phase == Phase.RESULT)) {
+            slot.hide()
+            line?.hide()
+            explainSeen = -1
+            return
+        }
+        val b = t[e.branch] ?: return
+        val cutLocal = Judge.ownCuts(ui.cuts)[b.id]?.let { b.pointAt(b.cutS(it)) } ?: b.pointAt(b.length * 0.5f)
+        val cut = treeToWorld(cutLocal)
+        if (e.serial != explainSeen) {
+            explainSeen = e.serial
+            explainPose = Placement.dockExplain(pose.position, cut, placed!!.position, t.crownRadius)
+            explainInViewMs = NEVER
+            PcLog.i("EXPLAIN reason=${e.reason} branch=${e.branch} at=${PcLog.pos(explainPose!!.first.position)} scale=${PcLog.f(explainPose!!.second)}")
+        }
+        val (p, scale) = explainPose ?: return
+        slot.place(p.position, p.rotation, scale)
+        // 3 mm line from the card's left edge to the cut
+        val (w, _) = PanelSpec.size(PanelSpec.EXPLAIN)
+        val left = p.position + p.rotation.rotate(Vec3(-w * PanelRig.DP_M * scale / 2f, 0f, 0f))
+        line?.draw(left, cut, 0.003f, (pose.position - cut).normalized())
+        // practice: fades 8 s after it was first in view
+        if (!ui.exam && ui.phase == Phase.PRUNING) {
+            val toCard = (p.position - pose.position).normalized()
+            val inView = toCard.dot(pose.forward) > cos(Placement.rad(35f))
+            if (inView && explainInViewMs == NEVER) explainInViewMs = now
+            if (explainInViewMs != NEVER && now - explainInViewMs > 8_000L && explainTimeoutSent != e.serial && !ui.debugHold) {
+                explainTimeoutSent = e.serial
+                sink(PcEvent.ExplainTimeout)
+            }
+        }
+    }
+
+    /** Logs where the panel and the tree are relative to the head 1 / 3 / 5 s after placing (factory rule 2026-10-29). */
+    private fun launchLogs(now: Long) {
+        if (placedAtMs == NEVER || logIndex >= logTimes.size) return
+        if (now - placedAtMs < logTimes[logIndex]) return
+        logIndex++
+        val p = placed ?: return
+        val d = dockPose
+        val toTree = p.position - pose.position
+        val treeAz = Math.toDegrees(Placement.angle(Placement.yawOf(toTree) - Placement.yawOf(pose.forward)).toDouble())
+        val panelAz = d?.let { Math.toDegrees(Placement.angle(Placement.yawOf(it.position - pose.position) - Placement.yawOf(pose.forward)).toDouble()) }
+        PcLog.i(String.format(Locale.US, "PC-LAYOUT t=%ds tree=%s dist=%.2f az=%.1f visible=%s panel=%s az=%s", logTimes[logIndex - 1] / 1000, PcLog.pos(p.position), Vec3(toTree.x, 0f, toTree.z).length, treeAz, treeRoot?.enabled, PcLog.pos(d?.position), panelAz?.let { String.format(Locale.US, "%.1f", it) }))
+    }
+
+    // =========================================================================================
+    // system pointer: taps and drags
+    // =========================================================================================
+
+    fun onSpatialTap(value: SpatialTapValue) {
+        val target = value.targetEntity
+        val name = runCatching { target?.getName() }.getOrNull() ?: "none"
+        if (target == null) return
+        val now = SystemClock.elapsedRealtime()
+        // ladder rings
+        val ri = ladderRings.indexOfFirst { it.id == target.id && it.enabled }
+        if (ri >= 0) {
+            val k = ladderBud[ri]
+            val sel = ui.selected ?: return
+            when (k) {
+                MORE_UP -> ladderWindow += 8
+                MORE_DOWN -> ladderWindow = (ladderWindow - 8).coerceAtLeast(0)
+                else -> if (k >= 0) {
+                    PcLog.i("TAP ladder bud=$k branch=$sel")
+                    sink(PcEvent.BudTapped(sel, k))
+                }
+            }
+            return
+        }
+        if (target.id == previewDisc?.id || target.id == scissors?.id) {
+            PcLog.i("TAP preview")
+            sink(PcEvent.PreviewTapped)
+            return
+        }
+        if (ui.phase == Phase.RELOCATING && target.id == floorCatcher?.id) {
+            val p = toStage(value.position.x, value.position.y, value.position.z) ?: return
+            placeMachine.aim(Vec3(p.x, floorY ?: p.y, p.z))
+            tree?.let { dropGhost(it) }
+            return
+        }
+        val bv = branchViews.values.firstOrNull { it.isGrab(target) }
+        if (bv != null && ui.phase == Phase.PRUNING) {
+            PcLog.i("TAP branch=${bv.branch.id} ${bv.branch.label} ${bv.branch.defect}")
+            sink(PcEvent.BranchTapped(bv.branch.id))
+            return
+        }
+        if (now - cursorTapMs < 250L) return
+        PcLog.i("TAP elsewhere target=$name")
+        sink(PcEvent.TappedElsewhere)
+    }
+
+    fun onSpatialDrag(phase: String, value: SpatialDragValue) {
+        when (phase) {
+            "start" -> {
+                val target = value.targetEntity ?: return
+                when {
+                    target.id == handle?.id && (ui.phase == Phase.PRUNING || ui.phase == Phase.RESULT) && placed != null -> {
+                        drag = DragKind.TREE
+                        dragPxToM = PX_M * (0.67f + 1.186f * pose.position.distanceTo(placed!!.position).coerceAtLeast(0.3f))
+                        sink(PcEvent.Moving(true))
+                        PcLog.i("DRAG tree start")
+                    }
+                    target.id == panelHandle?.id && dockPose != null -> {
+                        drag = DragKind.PANEL
+                        dragPxToM = PX_M * (0.67f + 1.186f * pose.position.distanceTo(dockPose!!.position).coerceAtLeast(0.3f))
+                        PcLog.i("DRAG panel start")
+                    }
+                }
+            }
+            "move" -> {
+                val kind = drag ?: return
+                val a = value.dragAmount
+                val right = pose.right.let { Vec3(it.x, 0f, it.z).normalized() }
+                val fwd = Vec3(pose.forward.x, 0f, pose.forward.z).normalized()
+                when (kind) {
+                    DragKind.TREE -> placed?.let { p -> placed = p.copy(position = p.position + right * (a.x * dragPxToM) - fwd * (a.y * dragPxToM)) }
+                    DragKind.PANEL -> dockPose?.let { d -> dockPose = d.copy(position = d.position + right * (a.x * dragPxToM) - Vec3.UP * (a.y * dragPxToM)) }
+                }
+            }
+            "end", "cancel" -> {
+                val kind = drag ?: return
+                drag = null
+                when (kind) {
+                    DragKind.TREE -> {
+                        endTreeDrag()
+                        sink(PcEvent.Moving(false))
+                    }
+                    DragKind.PANEL -> dockPose?.let { d ->
+                        // stays where it was let go, turned to face the user about the vertical only
+                        dockPose = Upright(d.position, Placement.yawOf(pose.position - d.position) + Math.PI.toFloat())
+                        PcLog.i("DRAG panel end at=${PcLog.pos(d.position)}")
+                    }
+                }
+            }
+        }
+    }
+
+    /** Let go of the floor handle: snap back onto the ring within 0.15 m / 20 degrees; pushed out of the clearance; panel re-docks. */
+    private fun endTreeDrag() {
+        val t = tree ?: return
+        val p = placed ?: return
+        val r = ringPose ?: p
+        var np = p
+        if (Vec3(p.position.x - r.position.x, 0f, p.position.z - r.position.z).length <= 0.15f && abs(Placement.angle(spin)) <= Placement.rad(20f)) {
+            np = r
+            spin = 0f
+            snapFlashUntil = SystemClock.elapsedRealtime() + 300L
+            PcGraph.sfx.play(Sfx.Kind.SNAP)
+            PcLog.i("SNAP tree back on the ring")
+        }
+        val toTree = Vec3(np.position.x - pose.position.x, 0f, np.position.z - pose.position.z)
+        val minD = t.crownRadius + clearance(t)
+        if (toTree.length < minD) {
+            val dir = if (toTree.length < 1e-3f) Vec3(pose.forward.x, 0f, pose.forward.z).normalized() else toTree.normalized()
+            val pushed = Vec3(pose.position.x, 0f, pose.position.z) + dir * minD
+            np = np.copy(position = Vec3(pushed.x, np.position.y, pushed.z))
+            PcLog.i("DRAG pushed out of the clearance")
+        }
+        placed = np
+        dockPanel()
+        PcLog.i("DRAG tree end at=${PcLog.pos(np.position)}")
+    }
+
+    private fun toStage(x: Float, y: Float, z: Float): Vec3? {
+        val c = content ?: return null
+        val root = stageRoot ?: return null
+        return runCatching {
+                val local = c.convertPosition(Vector3(x, y, z), ViewCoordinateSpace.Local, c.localSpatialCoordinateSpace)
+                root.convertPositionTo(local, null).domain()
+            }
+            .getOrNull()
+    }
+
+    // =========================================================================================
+    // debug probe
+    // =========================================================================================
+
+    override fun poseLine(): String = "POSE hmd pos=${PcLog.pos5(pose.position)} ${PcLog.quat5(pose.rotation)} fwd=${PcLog.pos5(pose.forward)} valid=$hasHead floorY=${floorY?.let { PcLog.f(it, 3) }} virtual=$floorVirtual"
+
+    override fun panelLines(): List<String> {
+        val rig = rig ?: return emptyList()
+        return rig.all.filter { it.shown && it.panel != null }.map { slot ->
+            val to = slot.position - pose.position
+            val az = Math.toDegrees(Placement.angle(Placement.yawOf(to) - Placement.yawOf(pose.forward)).toDouble())
+            val el = Math.toDegrees(atan2(to.y, Vec3(to.x, 0f, to.z).length).toDouble())
+            String.format(Locale.US, "PANEL id=%s pos=%s dist=%.3f az=%.1f el=%.1f scale=%.3f", slot.id, PcLog.pos(slot.position), to.length, az, el, slot.scale)
+        }
+    }
+
+    override fun treeLine(): String = "TREE lesson=${tree?.lesson} at=${PcLog.pos(placed?.position)} yaw=${placed?.let { PcLog.f(Math.toDegrees(it.yaw.toDouble()).toFloat(), 1) }} spin=${PcLog.f(Math.toDegrees(spin.toDouble()).toFloat(), 1)} built=$treeBuilt views=${branchViews.size} jobs=${jobs.size}"
+
+    override fun rotate(deg: Float) {
+        spin += Placement.rad(-deg)
+    }
+
+    override fun distance(m: Float) {
+        val p = placed ?: return
+        val t = tree ?: return
+        val (lo, hi) = distances(t)
+        val dir = Vec3(p.position.x - pose.position.x, 0f, p.position.z - pose.position.z).normalized()
+        val np = Vec3(pose.position.x, 0f, pose.position.z) + dir * m.coerceIn(lo, hi)
+        placed = p.copy(position = Vec3(np.x, p.position.y, np.z))
+        dockPanel()
+    }
+
+    private var qaDockFront = false
+
+    override fun dockFront(on: Boolean) {
+        qaDockFront = on
+        val p = placed ?: return
+        dockPose = if (on) Placement.dockPanel(pose.position, p.position, distance = 0.6f, leftDeg = 0f) else Placement.dockPanel(pose.position, p.position)
+        PcLog.i("PANEL dockfront=$on")
+    }
+
+    override fun moveTreeOntoHead() {
+        val p = placed ?: return
+        placed = p.copy(position = Vec3(pose.position.x, p.position.y, pose.position.z - 0.05f))
+    }
+
+    companion object {
+        private const val NEVER = Long.MIN_VALUE
+        private const val FAST_FRAME_MS = 40L
+        private const val SLOW_JOB_MS = 500L
+        private const val HEAD_SETTLE_MS = 600L
+        private const val FLOOR_TIMEOUT_MS = 5_000L
+        private const val FADE_MS = 400f
+        private const val DEAD = 0.15f
+        private val TURN_RATE = Math.toRadians(60.0).toFloat()
+        private const val LADDER_POOL = 32
+        private const val MAX_RINGS = 16
+        private const val MORE_UP = -2
+        private const val MORE_DOWN = -3
+        private const val PX_M = 0.0004f
+    }
+}
