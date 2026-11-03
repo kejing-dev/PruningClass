@@ -90,7 +90,6 @@ internal class PcMaterials(private val shared: SharedResources) {
     val ghost: Material = sheer(PcColors.Interaction, 0.35f)
     val ghostBad: Material = sheer(PcColors.Error, 0.45f)
     val explainLine: Material = sheer(PcColors.White, 0.6f)
-    val handleBar: Material = sheer(PcColors.White, 0.55f)
 
     private val textures = HashMap<String, Material>()
 

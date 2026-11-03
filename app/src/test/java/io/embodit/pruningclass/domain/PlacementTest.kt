@@ -11,7 +11,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Factory placement rules: yaw-only `placeUpright` (2026-10-30), four-way placement (2026-10-28), a placing mode with an end (2026-10-29). */
+/** Factory placement rules: yaw-only `placeUpright` (2026-10-30), four-way placement (2026-10-28), a placing mode with an end (2026-10-29), D29 buttons. */
 class PlacementTest {
     private val head = Vec3(0.3f, 1.62f, -0.4f)
 
@@ -40,27 +40,63 @@ class PlacementTest {
     }
 
     @Test
-    fun treeAndPanelFaceTheUserFromFourSides() {
+    fun treeFacesTheUserFromFourSidesBesideTheWindow() {
         val mark = Vec3(1f, 0f, -2f)
         for (side in listOf(0f, 90f, 180f, 270f)) {
             val a = Placement.rad(side)
             // user 2 m from the mark, looking at it
             val user = mark + Vec3(-kotlin.math.sin(a), 0f, -kotlin.math.cos(a)) * -2f + Vec3(0f, 1.6f, 0f)
             val fwd = (mark - user).let { Vec3(it.x, 0f, it.z).normalized() }
-            val tree = Placement.treeAhead(user, fwd, 2f, 0f)
+            val tree = Placement.treeBesideWindow(user, fwd, 2f, 0f)
             // the tree's front (+Z) points at the user
             val front = tree.rotation.rotate(Vec3(0f, 0f, 1f))
             val toUser = Vec3(user.x - tree.position.x, 0f, user.z - tree.position.z).normalized()
             val err = deg(acos(front.dot(toUser).coerceIn(-1f, 1f)))
             assertTrue("side $side: tree front off by $err", err < 10f)
-            val panel = Placement.dockPanel(user, tree.position)
-            val pf = panel.rotation.rotate(Vec3(0f, 0f, 1f))
-            val toUserP = Vec3(user.x - panel.position.x, 0f, user.z - panel.position.z).normalized()
-            assertTrue("side $side: panel faces the user", deg(acos(pf.dot(toUserP).coerceIn(-1f, 1f))) < 10f)
-            // panel 50 degrees left of the user -> tree line
-            val rel = deg(Placement.angle(Placement.yawOf(panel.position - user) - Placement.yawOf(tree.position - user)))
-            assertEquals("side $side: panel 50 left", 50f, rel, 1f)
-            assertTrue("scale never negative", panel.rotation.w * panel.rotation.w <= 1.0001f)
+            // 45 degrees right of the view: the main window opens straight ahead
+            val rel = deg(Placement.angle(Placement.yawOf(tree.position - user) - Placement.yawOf(fwd)))
+            assertEquals("side $side: tree 45 right of the view", -Placement.TREE_RIGHT_DEG, rel, 1f)
+        }
+    }
+
+    /** Factory D29: a button that places by the current head pose, pressed with the head at that yaw, lands within 2 degrees. */
+    @Test
+    fun bringHereFollowsTheHeadYaw() {
+        for (yawDeg in listOf(-170f, -90f, -12f, 0f, 37f, 90f, 179f)) {
+            for (pitch in listOf(-30f, 0f, 30f)) {
+                val f = headForward(yawDeg, pitch, 0f)
+                val tree = Placement.treeBesideWindow(head, f, 1.1f, 0.4f)
+                val az = deg(Placement.angle(Placement.yawOf(tree.position - head) - Placement.rad(yawDeg)))
+                assertEquals("yaw $yawDeg pitch $pitch", -Placement.TREE_RIGHT_DEG, az, 2f)
+                assertEquals("on the floor", 0.4f, tree.position.y, 1e-4f)
+                assertEquals("1.1 m away", 1.1f, Vec3(tree.position.x - head.x, 0f, tree.position.z - head.z).length, 1e-3f)
+            }
+        }
+    }
+
+    /** The tree's crown stays out of the window's cone (window about +/-9 degrees, 1.75 m ahead). */
+    @Test
+    fun treeCrownClearsTheWindow() {
+        val user = Vec3(0f, 1.6f, 0f)
+        for ((dist, crown) in listOf(1.1f to 0.5f, 2.0f to 1.05f)) {
+            val tree = Placement.treeBesideWindow(user, Vec3.AHEAD, dist, 0f)
+            val az = kotlin.math.abs(deg(Placement.angle(Placement.yawOf(tree.position - user))))
+            val half = deg(kotlin.math.asin((crown / dist).coerceAtMost(1f)))
+            assertTrue("crown edge ${az - half} deg off the view (window half-width 9)", az - half > 9f)
+        }
+    }
+
+    /** QA 2026-11-03: wherever the cut is on the crown, the explain card stays right of the window (window +/-9 deg, card ~+/-11). */
+    @Test
+    fun explainCardNeverInFrontOfTheWindow() {
+        val user = Vec3(0f, 1.6f, 0f)
+        val tree = Placement.treeBesideWindow(user, Vec3.AHEAD, 1.1f, 0.4f)
+        for (k in 0 until 24) {
+            val a = Placement.rad(k * 15f)
+            val cut = tree.position + Vec3(kotlin.math.sin(a) * 0.5f, 0.5f, kotlin.math.cos(a) * 0.5f)
+            val (card, _) = Placement.dockExplain(user, cut, tree.position, crownRadius = 0.5f)
+            val az = deg(Placement.angle(Placement.yawOf(card.position - user)))
+            assertTrue("cut at ${k * 15} deg: card at $az deg (window up to -9, card half-width 11)", az < -20f)
         }
     }
 

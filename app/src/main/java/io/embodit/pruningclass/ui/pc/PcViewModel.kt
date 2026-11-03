@@ -1,8 +1,6 @@
 package io.embodit.pruningclass.ui.pc
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.embodit.pruningclass.data.Store
 import io.embodit.pruningclass.domain.model.BlockReason
@@ -68,6 +66,19 @@ class PcViewModel(private val store: Store) : ViewModel() {
 
     private fun records() = LessonId.entries.associateWith { store.record(it) }
 
+    /**
+     * A new Stage composition (launch, relaunch after the system closed the Stage). The ViewModel lives for the process
+     * (shared with the window), so a surviving one goes back to S00 with the saved settings and records, as a cold start.
+     */
+    fun stageStarted() {
+        if (_state.value.phase == Phase.STARTING) return
+        PcLog.i("STAGE restart: state back to S00 (was ${_state.value.qaName})")
+        placeReturn = null
+        cardFromSettings = false
+        hintTurned = false
+        set { PcUiState(settings = store.settings(), records = records(), graduated = Species.entries.filter { store.graduated(it) }.toSet()) }
+    }
+
     val tree: Tree
         get() = TreeCache.get(_state.value.lesson)
 
@@ -121,7 +132,12 @@ class PcViewModel(private val store: Store) : ViewModel() {
             PcEvent.StartPruning -> if (s.phase == Phase.RULES) set { it.copy(phase = Phase.PRUNING) }
 
             // ------------------------------------------------------------ cutting
-            is PcEvent.BranchTapped -> if (s.phase == Phase.PRUNING && tree[e.branch]?.selectable == true) set { it.copy(selected = e.branch, preview = null) }
+            // tapping the selected branch again steps back like the back key: the preview first, then the selection (there is
+            // no room shell to catch a tap on empty space: factory D24 hard gate)
+            is PcEvent.BranchTapped ->
+                if (s.phase == Phase.PRUNING && tree[e.branch]?.selectable == true) {
+                    if (s.selected == e.branch) handle(PcEvent.TappedElsewhere) else set { it.copy(selected = e.branch, preview = null) }
+                }
             is PcEvent.BudTapped -> {
                 if (s.phase != Phase.PRUNING) return
                 if (s.selected == e.branch && s.preview == e.bud) cut(Cut(e.branch, e.bud)) else set { it.copy(selected = e.branch, preview = e.bud) }
@@ -171,12 +187,25 @@ class PcViewModel(private val store: Store) : ViewModel() {
                     Phase.RULE_CARD -> set { it.copy(phase = if (cardFromSettings) Phase.SETTINGS else it.back) }
                     else -> Unit
                 }
-            PcEvent.OpenRuleCard -> if (s.phase == Phase.PICKER || s.phase == Phase.SETTINGS) {
+            // the rule card is a tab of the main window: it opens from the picker, the settings page and during a lesson
+            PcEvent.OpenRuleCard -> if (s.phase in setOf(Phase.WELCOME, Phase.PICKER, Phase.RULES, Phase.SETTINGS, Phase.PRUNING, Phase.RESULT)) {
                 cardFromSettings = s.phase == Phase.SETTINGS
                 // from the settings page `back` stays the settings page's own way back
-                set { it.copy(phase = Phase.RULE_CARD, back = if (cardFromSettings) s.back else s.phase, cardSpecies = s.lesson.species) }
+                set { it.copy(phase = Phase.RULE_CARD, back = if (cardFromSettings) s.back else s.phase, cardSpecies = s.lesson.species, confirm = null) }
             }
             is PcEvent.CardSpecies -> set { it.copy(cardSpecies = e.species) }
+            is PcEvent.TabSelected ->
+                when (e.page) {
+                    PcPages.LESSON -> {
+                        if (s.phase == Phase.RULE_CARD) handle(PcEvent.Close)
+                        if (_state.value.phase == Phase.SETTINGS) handle(PcEvent.SettingsToggle)
+                    }
+                    PcPages.CARD -> if (s.phase != Phase.RULE_CARD) handle(PcEvent.OpenRuleCard)
+                    PcPages.SETTINGS -> {
+                        if (s.phase == Phase.RULE_CARD) handle(PcEvent.Close)
+                        if (_state.value.phase != Phase.SETTINGS) handle(PcEvent.SettingsToggle)
+                    }
+                }
 
             // ------------------------------------------------------------ settings
             PcEvent.SettingsToggle ->
@@ -385,10 +414,6 @@ class PcViewModel(private val store: Store) : ViewModel() {
         const val NOTICE_MS = 3_000L
     }
 
-    class Factory(private val context: Context) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T = PcViewModel(PcGraph.store(context.applicationContext)) as T
-    }
 }
 
 /** The rule id an explanation / hint quotes: by the reason when there is one (a wrong cut on healthy wood), else by the defect. */

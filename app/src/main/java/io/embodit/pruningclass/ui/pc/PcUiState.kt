@@ -164,6 +164,8 @@ sealed interface PcEvent {
     data object Replanted : PcEvent
     /** S20 main button [Cancel]: back to the state before, the tree stays where it was. */
     data object CancelReplant : PcEvent
+    /** A tab of the main window's TabBar: `lesson`, `card` or `settings` (the page shown follows the phase). */
+    data class TabSelected(val page: String) : PcEvent
     data class BlockChanged(val reason: BlockReason?) : PcEvent
     data object ExplainTimeout : PcEvent
     data object WentBackground : PcEvent
@@ -185,4 +187,18 @@ sealed interface PcEvent {
 /** One-shot effects for the screen. */
 sealed interface PcEffect {
     data object QuitApp : PcEffect
+}
+
+/** Pages of the main window (its TabBar). The page shown follows the phase; a tab press is [PcEvent.TabSelected]. */
+object PcPages {
+    const val LESSON = "lesson"
+    const val CARD = "card"
+    const val SETTINGS = "settings"
+
+    fun of(phase: Phase): String =
+        when (phase) {
+            Phase.RULE_CARD -> CARD
+            Phase.SETTINGS -> SETTINGS
+            else -> LESSON
+        }
 }

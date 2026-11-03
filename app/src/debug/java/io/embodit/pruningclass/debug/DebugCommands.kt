@@ -29,7 +29,8 @@ import java.util.Locale
  * - `autocut=perfect|sloppy|half|major|none|all|over25`, `hint=1|0`, `done`, `view=now|yours|model`, `row=<id>`
  * - `explain=keepBloom|keepSpur|major|inwardBud|tooMany|tooLow|inDead|secondOfPair|overPrune`
  * - `rotate=<deg>` (+ = right), `turn=<deg>` (the panel buttons), `dist=<m>`, `pose` (tree onto the head: S21)
- * - `dockfront=1|0` docked panels straight ahead (panel close-ups), `icons` (ic_* montage -> files/icons.png)
+ * - `window=close|open` the main window's × / the "open panel" chip, `tab=lesson|card|settings` a TabBar press,
+ *   `icons` (ic_* montage -> files/icons.png)
  * - `nofloor=1|0`, `floor=arrive`, `blocked=1|0`, `budzoom=1|0`, `seated=1|0`, `lang=zh|en`, `mute=1|0`, `testtex=1|0`
  * - `settings`, `recall`, `replant`, `quit`, `again`, `next`, `close`, `card`, `release`, `clear`, `ui <control>`
  * - `hmd`, `panels`, `tree`
@@ -71,14 +72,15 @@ internal object DebugCommands {
             "state", "goto" -> host.dispatch(PcEvent.DebugState(arg))
             "lesson" -> host.dispatch(PcEvent.LessonPicked(LessonId.of(arg) ?: return PcLog.i("CMD lesson needs R1..A3")))
             "select" -> host.dispatch(PcEvent.BranchTapped(arg.toInt()))
+            // the user taps the branch only when it is not selected yet (a second tap on it steps back)
             "preview" -> {
                 val (b, k) = arg.split(':')
-                host.dispatch(PcEvent.BranchTapped(b.toInt()))
+                if (host.uiState().selected != b.toInt()) host.dispatch(PcEvent.BranchTapped(b.toInt()))
                 host.dispatch(PcEvent.BudTapped(b.toInt(), bud(k)))
             }
             "cut" -> {
                 val (b, k) = arg.split(':')
-                host.dispatch(PcEvent.BranchTapped(b.toInt()))
+                if (host.uiState().selected != b.toInt()) host.dispatch(PcEvent.BranchTapped(b.toInt()))
                 host.dispatch(PcEvent.BudTapped(b.toInt(), bud(k)))
                 host.dispatch(PcEvent.BudTapped(b.toInt(), bud(k)))
             }
@@ -106,7 +108,8 @@ internal object DebugCommands {
             "rotate" -> scene?.rotate(arg.toFloat())
             "turn" -> host.dispatch(PcEvent.Turn(arg.toFloat()))
             "dist" -> scene?.distance(arg.toFloat())
-            "dockfront" -> scene?.dockFront(on)
+            "window" -> host.window(!arg.equals("close", true))
+            "tab" -> host.dispatch(PcEvent.TabSelected(arg.lowercase(Locale.US)))
             "pose" -> {
                 scene?.moveTreeOntoHead()
                 PcLog.i("CMD pose: tree moved onto the head")

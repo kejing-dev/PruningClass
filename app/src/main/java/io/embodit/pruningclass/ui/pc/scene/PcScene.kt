@@ -43,6 +43,7 @@ import io.embodit.pruningclass.platform.audio.Sfx
 import io.embodit.pruningclass.platform.sense.PlaneTracker
 import io.embodit.pruningclass.platform.tracking.HeadPose
 import io.embodit.pruningclass.ui.pc.PcEvent
+import io.embodit.pruningclass.ui.pc.PcShared
 import io.embodit.pruningclass.ui.pc.PcUiState
 import io.embodit.pruningclass.ui.pc.Phase
 import io.embodit.pruningclass.ui.pc.TreeCache
@@ -179,7 +180,8 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private var hintSeen = 0
     private var selectedSeen: Int? = null
 
-    private enum class DragKind { TREE, PANEL }
+    // the only drag: the tree by its floor ring (D21: the 3D object's own handle); panels are moved by the system window
+    private enum class DragKind { TREE }
 
     // ---- ladder / preview
     private var ladderRoot: Entity? = null
@@ -199,18 +201,13 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private val nyLabels = ArrayList<Entity>()
     private var nyFadeMs = NEVER
 
-    // ---- panels
-    private var shownPanel: String? = null
-    private var frontPose: Upright? = null
-    private var frontFor: String? = null
-    private var dockPose: Upright? = null
-    private var panelHandle: Entity? = null
+    // ---- Stage panels (explain card, open-window chip)
+    private var chipPose: Upright? = null
     private var explainLine: Strip? = null
     private var explainSeen = -1
     private var explainPose: Pair<Upright, Float>? = null
     private var explainInViewMs = NEVER
     private var explainTimeoutSent = -1
-    private var dialogPlaced = false
     private var logTimes = longArrayOf(1_000L, 3_000L, 5_000L)
     private var logIndex = 0
 
@@ -237,7 +234,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             val (w, h) = PanelSpec.size(id)
             rig.world(id, w, h).also { it.autoFace = false }
         }
-        buildBackstop(root)
         startSensing()
         ActiveScene.scene = this
         bindPanels(attachments)
@@ -368,12 +364,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             s.components.set(InteractableComponent())
             s.enabled = false
         }
-        panelHandle = model(meshes.cube, mats.handleBar, "panelHandle").also {
-            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1f, 2.5f, 3f))), physicsMaterial = PhysicsMaterialResource()))
-            it.components.set(InteractableComponent())
-            root.addChild(it)
-            it.enabled = false
-        }
         explainLine = Strip(root, meshes.band, mats.explainLine, "explainLine")
         root.addChild(Entity().named("keyLight").also {
             it.components.set(DirectionalLightComponent(PcColors.White.color4(), 2500f, false))
@@ -386,19 +376,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
 
     private suspend fun pace() {
         delay(if (lastFrameDtMs in 1..FAST_FRAME_MS) 16L else 500L)
-    }
-
-    private fun buildBackstop(root: Entity) {
-        val shell = Entity().named("backstop")
-        root.addChild(shell)
-        val h = 6f
-        for ((c, size) in listOf(Vec3(h, 1.5f, 0f) to Vec3(0.2f, 2 * h, 2 * h), Vec3(-h, 1.5f, 0f) to Vec3(0.2f, 2 * h, 2 * h), Vec3(0f, 1.5f, h) to Vec3(2 * h, 2 * h, 0.2f), Vec3(0f, 1.5f, -h) to Vec3(2 * h, 2 * h, 0.2f), Vec3(0f, 1.5f + h, 0f) to Vec3(2 * h, 0.2f, 2 * h))) {
-            val slab = Entity().named("backstop")
-            slab.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(size.sdk())), physicsMaterial = PhysicsMaterialResource()))
-            slab.components.set(InteractableComponent())
-            shell.addChild(slab)
-            slab.setLocal(position = c)
-        }
     }
 
     fun bindPanels(attachments: SpatialViewAttachments) {
@@ -742,14 +719,15 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val wantsPlace = ui.phase == Phase.PLACING || ui.phase.inLesson
         if (wantsPlace && ui.placeSerial != placeSerialSeen && floorY != null && treeBuilt) {
             placeSerialSeen = ui.placeSerial
-            val p = Placement.treeAhead(pose.position, pose.forward, distances(t).first, floorY!!)
+            // beside the main window, not under it: placing follows a press in the window (a lesson card, [Try again],
+            // [Bring here], which also reopens the window in front), so the user faces the window now (native-window-move §4)
+            val p = Placement.treeBesideWindow(pose.position, pose.forward, distances(t).first, floorY!!)
             placed = p
             ringPose = p
             placeMachine.set(p.position)
             spin = 0f
             spinStartMs = NEVER
             fadeStartMs = now
-            dockPanel()
             PcLog.i("PC-PLACE tree=${PcLog.pos(p.position)} yaw=${PcLog.f(Math.toDegrees(p.yaw.toDouble()).toFloat(), 1)} head=${PcLog.pos(pose.position)} dist=${PcLog.f(distances(t).first)} floorY=${PcLog.f(floorY!!, 3)} virtual=$floorVirtual")
             logIndex = 0
             placedAtMs = now
@@ -761,11 +739,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     }
 
     private var placedAtMs = NEVER
-
-    private fun dockPanel() {
-        val p = placed ?: return
-        dockPose = if (qaDockFront) Placement.dockPanel(pose.position, p.position, distance = 0.6f, leftDeg = 0f) else Placement.dockPanel(pose.position, p.position)
-    }
 
     /** Tree transform: placement + the user's spin; visible / faded by state. */
     private fun treeFrame(now: Long) {
@@ -918,7 +891,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         if (moving != movingStickSent) {
             movingStickSent = moving
             sink(PcEvent.Moving(moving))
-            if (!moving) dockPanel()
         }
         // trigger with the cursor: first press previews, the second cuts (same as tapping the ring twice)
         val pressed = sample?.pressed == true
@@ -1216,7 +1188,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         placed = Upright(Vec3(at.x, floorY ?: at.y, at.z), yaw)
         ringPose = placed
         spin = 0f
-        dockPanel()
         PcLog.i("PC-PLACE replant tree=${PcLog.pos(placed!!.position)}")
         sink(PcEvent.Replanted)
     }
@@ -1236,70 +1207,32 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     }
 
     // =========================================================================================
-    // panels (design `rules.panelFollow`: docked and locked, draggable, never following the head)
+    // Stage panels: the main window is the system's (moved, closed and minimised by its own controls); the Stage only
+    // places the "open panel" chip and the explain card
     // =========================================================================================
 
-    private fun panelFor(s: PcUiState): Pair<String, Boolean> =
-        when (s.phase) {
-            Phase.WELCOME -> PanelSpec.WELCOME to false
-            Phase.PICKER -> PanelSpec.PICKER to false
-            Phase.RULES -> PanelSpec.RULES to false
-            Phase.GRADUATED, Phase.RULE_CARD -> PanelSpec.CARD to false
-            Phase.RESULT -> PanelSpec.RESULT to true
-            Phase.SETTINGS -> PanelSpec.SETTINGS to (s.back.inLesson && dockPose != null)
-            Phase.BLOCKED -> PanelSpec.DIALOG to false
-            Phase.PRUNING, Phase.RELOCATING -> PanelSpec.CONTROL to true
-            Phase.PLACING -> PanelSpec.CONTROL to (dockPose != null && placed != null)
-            else -> PanelSpec.CONTROL to false
-        }
-
+    /**
+     * The "open panel" chip while the main window is closed (its ×) or minimised: 0.8 m ahead, 15 degrees below the
+     * eyes and 20 degrees left (the tree stands to the right), yaw only; placed when it appears, again only if it ends up
+     * more than 70 degrees off the view (factory rule 2026-10-29).
+     */
     private fun placePanels(rig: PanelRig, now: Long) {
         if (!hasHead) return
-        val (id, docked) = panelFor(ui)
-        val k = PanelSpec.M_PER_DP
-        val pose: Upright
-        if (docked && dockPose != null) {
-            val d = dockPose!!
-            // contents taller than the control panel hang from its top edge
-            val (_, h) = PanelSpec.size(id)
-            val ctrlH = PanelSpec.size(PanelSpec.CONTROL).second
-            pose = d.copy(position = d.position - Vec3(0f, (h - ctrlH) * k / 2f, 0f))
-        } else {
-            val front = frontFor
-            val dist = when (id) {
-                PanelSpec.RULES -> 0.7f
-                PanelSpec.DIALOG -> 0.6f
-                else -> 0.8f
-            }
-            val below = if (id == PanelSpec.DIALOG) 5f else 12f
-            val fp = frontPose
-            // placed once when it appears; again only if it ended up more than 70 degrees off the view (factory rule 2026-10-29)
-            val off = fp?.let { abs(Placement.angle(Placement.yawOf(it.position - this.pose.position) - Placement.yawOf(this.pose.forward))) } ?: 0f
-            if (front != id || fp == null || off > Placement.rad(70f) && !ui.debugHold) {
-                frontFor = id
-                frontPose = Placement.placeUpright(this.pose.position, this.pose.forward, dist, below)
-                PcLog.i("PANEL front id=$id at=${PcLog.pos(frontPose!!.position)}")
-            }
-            pose = frontPose!!
+        val slot = rig[PanelSpec.OPEN] ?: return
+        if (!PcShared.windowClosed || PcShared.recallPending) {
+            if (chipPose != null) PcLog.i("PANEL chip hidden (window ${PcShared.window})")
+            chipPose = null
+            slot.hide()
+            return
         }
-        if (shownPanel != id) {
-            shownPanel?.let { rig[it]?.hide() }
-            shownPanel = id
-            PcLog.i("PANEL show id=$id docked=$docked")
+        val cp = chipPose
+        val off = cp?.let { abs(Placement.angle(Placement.yawOf(it.position - pose.position) - Placement.yawOf(pose.forward))) } ?: 0f
+        if (cp == null || off > Placement.rad(70f)) {
+            chipPose = Placement.placeUpright(pose.position, pose.forward, 0.8f, 15f, offsetDeg = 20f)
+            PcLog.i("PANEL chip at=${PcLog.pos(chipPose!!.position)} (window ${PcShared.window})")
         }
-        rig[id]?.place(pose.position, pose.rotation, PanelSpec.SCALE)
-        for (other in PanelSpec.pool) if (other != id && other != PanelSpec.EXPLAIN) rig[other]?.hide()
-        // drag handle bar on the top edge of a docked panel
-        val bar = panelHandle
-        if (bar != null) {
-            if (docked && dockPose != null) {
-                val (w, h) = PanelSpec.size(id)
-                val top = pose.position + pose.rotation.rotate(Vec3(0f, h * k / 2f + 0.012f, 0.002f))
-                bar.show(true)
-                bar.setLocal(position = top, rotation = pose.rotation, scale = Vec3(w * k * 0.35f, 0.008f, 0.006f))
-            } else bar.show(false)
-        }
-        dialogPlaced = id == PanelSpec.DIALOG
+        val p = chipPose!!
+        slot.place(p.position, p.rotation, PanelSpec.SCALE)
     }
 
     private fun explainFrame(now: Long) {
@@ -1347,11 +1280,10 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         if (now - placedAtMs < logTimes[logIndex]) return
         logIndex++
         val p = placed ?: return
-        val d = dockPose
         val toTree = p.position - pose.position
         val treeAz = Math.toDegrees(Placement.angle(Placement.yawOf(toTree) - Placement.yawOf(pose.forward)).toDouble())
-        val panelAz = d?.let { Math.toDegrees(Placement.angle(Placement.yawOf(it.position - pose.position) - Placement.yawOf(pose.forward)).toDouble()) }
-        PcLog.i(String.format(Locale.US, "PC-LAYOUT t=%ds tree=%s dist=%.2f az=%.1f visible=%s panel=%s az=%s", logTimes[logIndex - 1] / 1000, PcLog.pos(p.position), Vec3(toTree.x, 0f, toTree.z).length, treeAz, treeRoot?.enabled, PcLog.pos(d?.position), panelAz?.let { String.format(Locale.US, "%.1f", it) }))
+        // the main window's pose is the system's (no API reports it): its lifecycle is logged instead
+        PcLog.i(String.format(Locale.US, "PC-LAYOUT t=%ds tree=%s dist=%.2f az=%.1f visible=%s window=%s", logTimes[logIndex - 1] / 1000, PcLog.pos(p.position), Vec3(toTree.x, 0f, toTree.z).length, treeAz, treeRoot?.enabled, PcShared.window))
     }
 
     // =========================================================================================
@@ -1411,11 +1343,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                         sink(PcEvent.Moving(true))
                         PcLog.i("DRAG tree start")
                     }
-                    target.id == panelHandle?.id && dockPose != null -> {
-                        drag = DragKind.PANEL
-                        dragPxToM = PX_M * (0.67f + 1.186f * pose.position.distanceTo(dockPose!!.position).coerceAtLeast(0.3f))
-                        PcLog.i("DRAG panel start")
-                    }
                 }
             }
             "move" -> {
@@ -1425,7 +1352,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                 val fwd = Vec3(pose.forward.x, 0f, pose.forward.z).normalized()
                 when (kind) {
                     DragKind.TREE -> placed?.let { p -> placed = p.copy(position = p.position + right * (a.x * dragPxToM) - fwd * (a.y * dragPxToM)) }
-                    DragKind.PANEL -> dockPose?.let { d -> dockPose = d.copy(position = d.position + right * (a.x * dragPxToM) - Vec3.UP * (a.y * dragPxToM)) }
                 }
             }
             "end", "cancel" -> {
@@ -1436,17 +1362,12 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                         endTreeDrag()
                         sink(PcEvent.Moving(false))
                     }
-                    DragKind.PANEL -> dockPose?.let { d ->
-                        // stays where it was let go, turned to face the user about the vertical only
-                        dockPose = Upright(d.position, Placement.yawOf(pose.position - d.position) + Math.PI.toFloat())
-                        PcLog.i("DRAG panel end at=${PcLog.pos(d.position)}")
-                    }
                 }
             }
         }
     }
 
-    /** Let go of the floor handle: snap back onto the ring within 0.15 m / 20 degrees; pushed out of the clearance; panel re-docks. */
+    /** Let go of the floor handle: snap back onto the ring within 0.15 m / 20 degrees; pushed out of the clearance. */
     private fun endTreeDrag() {
         val t = tree ?: return
         val p = placed ?: return
@@ -1468,7 +1389,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             PcLog.i("DRAG pushed out of the clearance")
         }
         placed = np
-        dockPanel()
         PcLog.i("DRAG tree end at=${PcLog.pos(np.position)}")
     }
 
@@ -1511,16 +1431,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val dir = Vec3(p.position.x - pose.position.x, 0f, p.position.z - pose.position.z).normalized()
         val np = Vec3(pose.position.x, 0f, pose.position.z) + dir * m.coerceIn(lo, hi)
         placed = p.copy(position = Vec3(np.x, p.position.y, np.z))
-        dockPanel()
-    }
-
-    private var qaDockFront = false
-
-    override fun dockFront(on: Boolean) {
-        qaDockFront = on
-        val p = placed ?: return
-        dockPose = if (on) Placement.dockPanel(pose.position, p.position, distance = 0.6f, leftDeg = 0f) else Placement.dockPanel(pose.position, p.position)
-        PcLog.i("PANEL dockfront=$on")
     }
 
     override fun moveTreeOntoHead() {

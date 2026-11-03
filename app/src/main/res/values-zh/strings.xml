@@ -77,6 +77,9 @@
     <string name="action_replant">重新放树</string>
     <string name="action_rule_card">口诀卡</string>
     <string name="action_settings">设置</string>
+    <string name="tab_lesson">修枝</string>
+    <string name="action_open_panel">打开面板</string>
+    <string name="rules_this_lesson">这一课的口诀</string>
     <string name="action_quit">退出应用</string>
     <string name="action_cancel">取消</string>
     <string name="action_quit_short">退出</string>
@@ -161,7 +164,7 @@
     <string name="vol_high">高</string>
     <string name="set_language">语言</string>
     <string name="set_about">关于</string>
-    <string name="about_version">修枝课 v0.1.0</string>
+    <string name="about_version">修枝课 v0.1.1</string>
     <string name="on">开</string>
     <string name="off">关</string>
     <string name="lang_zh">中</string>

@@ -1,20 +1,21 @@
 package io.embodit.pruningclass.ui.pc
 
-import android.app.Activity
 import android.content.pm.ApplicationInfo
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.pico.spatial.ui.foundation.dsl.registerSystem
 import com.pico.spatial.ui.foundation.dsl.unregisterSystem
 import com.pico.spatial.ui.platform.containers.LocalSpatialNavigator
@@ -26,18 +27,63 @@ import io.embodit.pruningclass.ui.pc.components.stringByName
 import io.embodit.pruningclass.ui.pc.debug.PcProbe
 import io.embodit.pruningclass.ui.pc.scene.PcFrameSystem
 import io.embodit.pruningclass.ui.pc.scene.PcScene
-import kotlin.system.exitProcess
+import io.embodit.pruningclass.ui.pc.window.exitApp
 
 /**
- * The one screen of the app, living in a Mixed Stage. The ViewModel holds the state, the [PcScene] turns state into
- * entities and reports the user's 3D input and its milestones, and [PcStage] declares the panels.
+ * The Stage side of the app (Mixed Stage). The shared ViewModel holds the state, the [PcScene] turns state into entities
+ * and reports the user's 3D input and its milestones, [PcStage] declares the two Stage panels; every page is in the
+ * main system window (`PcWindow`), which this screen opens, recalls and closes.
  */
 @Composable
 fun PcScreen() {
     val context = LocalContext.current
-    val viewModel: PcViewModel = viewModel(factory = PcViewModel.Factory(context))
+    // shared with the main window (two containers, one process: factory native-window-move §3.4)
+    val viewModel = remember(context) { PcShared.viewModel(context) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val navigator = LocalSpatialNavigator.current
+
+    // the main window opens with the Stage; its × closes it and the Stage's chip opens it again
+    fun openWindow() {
+        if (PcShared.windowMinimised && navigator.restoreWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG)) {
+            PcLog.i("WINDOW restore (was minimised)")
+            return
+        }
+        navigator.openWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG)
+    }
+    fun closeWindow() = navigator.closeWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG)
+    LaunchedEffect(Unit) {
+        // the ViewModel outlives a Stage (process level): a new Stage starts from S00 like a cold start
+        viewModel.stageStarted()
+        PcLog.i("WINDOW open (Stage started)")
+        openWindow()
+    }
+    // [Bring here] (settings): the window cannot be moved by code; closed and opened again it comes back in front of
+    // the head. Open only after ON_DESTROY: an open right after a close is swallowed (native-window-move §3.5)
+    var recallSeen by remember { mutableIntStateOf(state.recallSerial) }
+    LaunchedEffect(state.recallSerial) {
+        if (state.recallSerial == recallSeen) return@LaunchedEffect
+        recallSeen = state.recallSerial
+        if (PcShared.windowOpen) {
+            PcShared.recallPending = true
+            PcLog.i("WINDOW recall: close, open after ON_DESTROY")
+            closeWindow()
+        } else {
+            openWindow()
+        }
+    }
+    // pending until the window is back (it takes 3 - 6 s to appear): the "open panel" chip stays hidden meanwhile
+    var recallOpened by remember { mutableStateOf(false) }
+    LaunchedEffect(PcShared.window) {
+        if (!PcShared.recallPending) return@LaunchedEffect
+        if (PcShared.window == "ON_DESTROY" && !recallOpened) {
+            recallOpened = true
+            PcLog.i("WINDOW recall: open")
+            openWindow()
+        } else if (PcShared.windowOpen && recallOpened) {
+            recallOpened = false
+            PcShared.recallPending = false
+        }
+    }
 
     remember(context) {
         PcProbe.enabled = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
@@ -58,6 +104,8 @@ fun PcScreen() {
                 override fun scene(): PcProbe.SceneProbe = scene
 
                 override fun pressControl(name: String): Boolean = PcProbe.click(name)
+
+                override fun window(open: Boolean) = if (open) openWindow() else closeWindow()
             }
         PcLog.i("STAGE enter")
         onDispose {
@@ -95,14 +143,12 @@ fun PcScreen() {
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                PcEffect.QuitApp -> {
-                    // design D26: leave the task, release tracking / audio, end the process
-                    PcLog.i("QUIT finishAndRemoveTask")
-                    scene.detach()
-                    runCatching { navigator.closeStage() }
-                    runCatching { (context as? Activity)?.finishAndRemoveTask() }
-                    exitProcess(0)
-                }
+                // design D26 / template exit: release tracking / audio and the window, close the Stage, remove the tasks, end
+                PcEffect.QuitApp ->
+                    exitApp(context, navigator) {
+                        scene.detach()
+                        closeWindow()
+                    }
             }
         }
     }
@@ -113,6 +159,6 @@ fun PcScreen() {
         true
     }
     CompositionLocalProvider(LocalPcResources provides resources) {
-        PcStage(state = state, scene = scene, onEvent = viewModel::onEvent)
+        PcStage(state = state, scene = scene, onEvent = viewModel::onEvent, onOpenWindow = ::openWindow)
     }
 }

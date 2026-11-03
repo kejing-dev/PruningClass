@@ -15,7 +15,8 @@ data class Upright(val position: Vec3, val yaw: Float) {
 }
 
 /**
- * Every place the app puts content (design `rules.placement`, `rules.panelFollow`, `rules.explainDock`; profile D9 / D21):
+ * Every place the app puts content (design `rules.placement`, `rules.explainDock`; profile D9 / D21; the 2D pages are in
+ * the main system window, which the system places):
  * only the head's position and horizontal heading count, pitch and roll never do (`placeUpright`).
  */
 object Placement {
@@ -39,25 +40,28 @@ object Placement {
         return Upright(p, yaw)
     }
 
-    /** The tree on the floor [distance] straight ahead, its front (+Z of the tree) towards the viewer. */
-    fun treeAhead(head: Vec3, headForward: Vec3, distance: Float, floorY: Float): Upright {
-        val yaw = yawOf(headForward)
+    /** The tree on the floor [distance] ahead, turned [offsetDeg] (positive = left), its front (+Z of the tree) towards the viewer. */
+    fun treeAhead(head: Vec3, headForward: Vec3, distance: Float, floorY: Float, offsetDeg: Float = 0f): Upright {
+        val yaw = yawOf(headForward) + rad(offsetDeg)
         val p = head + dirOfYaw(yaw) * distance
         return Upright(Vec3(p.x, floorY, p.z), yaw)
     }
 
-    /** Control panel docked [leftDeg] left of the user -> tree line, [distance] from the head, [belowDeg] below the eyes. */
-    fun dockPanel(head: Vec3, tree: Vec3, distance: Float = 0.9f, leftDeg: Float = 50f, belowDeg: Float = 12f): Upright {
-        val line = yawOf(tree - head)
-        val yaw = line + rad(leftDeg)
-        val p = head + dirOfYaw(yaw) * distance - Vec3(0f, tan(rad(belowDeg)) * distance, 0f)
-        return Upright(p, yaw)
-    }
+    /**
+     * Where the tree goes when a lesson starts or is brought back: [TREE_RIGHT_DEG] right of the view, beside the main
+     * window, not between the user and it. The system opens the window straight ahead and no API places it next to Stage
+     * content (factory native-window-move §4: "the 3D content keeps out of the window"). 45 degrees clears the window
+     * (about +/-9 degrees at 1.75 m) and the apple's crown (1.05 m at 2.00 m: +/-31 degrees).
+     */
+    fun treeBesideWindow(head: Vec3, headForward: Vec3, distance: Float, floorY: Float): Upright =
+        treeAhead(head, headForward, distance, floorY, offsetDeg = -TREE_RIGHT_DEG)
+
+    const val TREE_RIGHT_DEG = 45f
 
     /**
      * Explain card (design `rules.explainDock`): along the user -> cut direction turned 14 degrees right and 6 up, at the cut
      * distance - 0.2 m, and never inside the crown ([crownRadius] around the trunk, 0.1 m clear: no branch in front of
-     * it); its azimuth relative to the user -> tree line clamped to -35..+45 degrees (+ = right here). Scale keeps the
+     * it); its azimuth relative to the user -> tree line clamped to -15..+45 degrees (+ = right here). Scale keeps the
      * angular size of a 0.75-scale card at 0.9 m.
      */
     fun dockExplain(head: Vec3, cut: Vec3, tree: Vec3, crownRadius: Float = 0f): Pair<Upright, Float> {
@@ -68,7 +72,8 @@ object Placement {
         val treeYaw = yawOf(tree - head)
         // right = negative yaw
         var rel = Math.toDegrees(angle(cutYaw - treeYaw).toDouble()).toFloat() - 14f
-        rel = rel.coerceIn(-45f, 35f)
+        // at most 15 degrees left of the tree line: the main window stands 45 degrees left of it (design said 35)
+        rel = rel.coerceIn(-45f, 15f)
         val yaw = treeYaw + rad(rel)
         val horiz = Vec3(toCut.x, 0f, toCut.z).length.coerceAtLeast(0.05f)
         val pitch = atan2(toCut.y, horiz) + rad(6f)

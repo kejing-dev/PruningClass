@@ -49,6 +49,9 @@ object PcProbe {
 
         /** Presses a panel control by its stable name; false when no such control is composed. */
         fun pressControl(name: String): Boolean
+
+        /** Debug `window=close|open`: the main window's × and the Stage's "open panel" chip (the user's own two ways). */
+        fun window(open: Boolean)
     }
 
     interface SceneProbe {
@@ -66,9 +69,6 @@ object PcProbe {
 
         /** Debug `pose`: moves the tree onto the head (the emulator camera cannot be put inside the crown by a command). */
         fun moveTreeOntoHead()
-
-        /** Debug `dockfront=1`: docked panels 0.6 m straight ahead instead of 0.9 m, 50 degrees left (panel close-ups only). */
-        fun dockFront(on: Boolean)
     }
 
     @Volatile var host: Host? = null

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.Canvas
@@ -26,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -45,6 +48,8 @@ import com.pico.spatial.ui.design.SegmentItem
 import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.foundation.material.backgroundMaterial
 import com.pico.spatial.ui.platform.Material
+import io.embodit.pruningclass.platform.PcLog
+import io.embodit.pruningclass.ui.pc.debug.LocalProbePanel
 import io.embodit.pruningclass.ui.pc.debug.probe
 import io.embodit.pruningclass.ui.theme.PcColors
 
@@ -53,7 +58,21 @@ internal val PanelPadding = 16.dp
 internal val KeyWidth = 56.dp
 internal val KeyHeight = 48.dp
 
-/** Glass root of a panel: clipped shape, Material.Regular, padding. */
+/** True inside the main system window (its pages); false on the Stage. */
+internal val LocalInWindow = staticCompositionLocalOf { false }
+
+/**
+ * Root of a page of the main window: a padded column filling the window. The window brings its own glass, 32 dp corners
+ * and size (factory native-window-move §3.2), so a page draws none of them.
+ */
+@Composable
+internal fun WindowPage(padding: Dp = PanelPadding, spacing: Dp = 8.dp, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = padding + 8.dp, vertical = padding), verticalArrangement = Arrangement.spacedBy(spacing)) {
+        content()
+    }
+}
+
+/** Glass root of a Stage panel (the explain card): clipped shape, Material.Regular, padding. */
 @Composable
 internal fun Glass(
     width: Dp,
@@ -70,6 +89,22 @@ internal fun Glass(
     ) {
         content()
     }
+}
+
+/**
+ * Overflow check of a fixed-line text (factory D13, 2026-10-31): logs `OVERFLOW <panel>/<text>` once when the text
+ * does not fit, so QA can run every state in the longest language and read the log instead of hunting for ellipses.
+ */
+@Composable
+internal fun overflowLog(text: String): (TextLayoutResult) -> Unit {
+    val panel = LocalProbePanel.current
+    return { r -> if (r.hasVisualOverflow && OverflowSeen.add("$panel/$text")) PcLog.i("OVERFLOW $panel/${text.take(40)}") }
+}
+
+private object OverflowSeen {
+    private val seen = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    fun add(key: String): Boolean = seen.add(key)
 }
 
 /** Type roles of the design that differ from the stock PicoTheme roles (design `typography.roles`). */
@@ -158,7 +193,7 @@ internal fun WordButton(
             Icon(painter = painterResource(iconRes), contentDescription = null, modifier = Modifier.size(20.dp), tint = content)
             Spacer(modifier = Modifier.width(8.dp))
         }
-        Text(text = text, color = content, maxLines = 1, overflow = TextOverflow.Ellipsis, style = PcType.title)
+        Text(text = text, color = content, maxLines = 1, overflow = TextOverflow.Ellipsis, style = PcType.title, onTextLayout = overflowLog(text))
     }
 }
 
@@ -211,7 +246,7 @@ internal fun Segments(items: List<Pair<String, String>>, selected: Int?, onSelec
                     ),
                 title = {
                     // design-style: inherited-content-color SegmentItem
-                    Text(text = text, maxLines = 1, style = PicoTheme.typography.labelLarge)
+                    Text(text = text, maxLines = 1, style = PicoTheme.typography.labelLarge, onTextLayout = overflowLog(text))
                 },
             )
         }
@@ -222,7 +257,7 @@ internal fun Segments(items: List<Pair<String, String>>, selected: Int?, onSelec
 @Composable
 internal fun ValueChip(text: String, dim: Boolean = false) {
     Chip(
-        label = { Text(text = text, maxLines = 1, softWrap = false, style = PcType.chip, color = if (dim) PicoTheme.colorScheme.labelSecondary else PicoTheme.colorScheme.labelPrimary) },
+        label = { Text(text = text, maxLines = 1, softWrap = false, style = PcType.chip, color = if (dim) PicoTheme.colorScheme.labelSecondary else PicoTheme.colorScheme.labelPrimary, onTextLayout = overflowLog(text)) },
         onClick = {},
         modifier = Modifier.height(32.dp),
     )
