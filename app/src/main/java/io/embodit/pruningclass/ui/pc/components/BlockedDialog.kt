@@ -36,15 +36,18 @@ internal fun BlockedDialog(reason: BlockReason?, onEvent: (PcEvent) -> Unit) {
         Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
             Row(modifier = Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Icon(painter = painterResource(R.drawable.ic_info), contentDescription = null, modifier = Modifier.size(28.dp), tint = ink)
-                Text(text = rs(R.string.dialog_title), color = ink, style = PcType.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val title = rs(R.string.dialog_title)
+                Text(text = title, color = ink, style = PcType.title, maxLines = 1, overflow = TextOverflow.Ellipsis, onTextLayout = overflowLog(title))
             }
             Spacer(modifier = Modifier.height(8.dp))
+            val body = if (reason == BlockReason.NO_HEAD_POSE || reason == BlockReason.DEVICE_NOT_SUPPORTED) rs(R.string.dialog_no_head) else rs(R.string.dialog_not_full_space)
             Text(
-                text = if (reason == BlockReason.NO_HEAD_POSE || reason == BlockReason.DEVICE_NOT_SUPPORTED) rs(R.string.dialog_no_head) else rs(R.string.dialog_not_full_space),
+                text = body,
                 color = PicoTheme.colorScheme.labelSecondary,
                 style = PcType.label,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                onTextLayout = overflowLog(body),
             )
             Spacer(modifier = Modifier.weight(1f))
             Row(modifier = Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {

@@ -6,6 +6,7 @@ ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
 J="$(dirname "$0")/pc.sh"
 for i in $(seq 1 "$N"); do
   "$ADB" -s $DEV shell am force-stop $PKG; "$ADB" -s $DEV logcat -c; "$ADB" -s $DEV logcat -b events -c
+  "$ADB" -s $DEV shell sleep 8   # an immediate relaunch after force-stop sometimes leaves the launcher in front (2026-11-09)
   "$J" launch
   for s in $(seq 1 12); do "$ADB" -s $DEV shell sleep 5; done
   anr=$("$ADB" -s $DEV logcat -b events -d | grep -c "am_anr.*$PKG")

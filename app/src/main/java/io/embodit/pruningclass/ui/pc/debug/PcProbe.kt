@@ -69,6 +69,12 @@ object PcProbe {
 
         /** Debug `pose`: moves the tree onto the head (the emulator camera cannot be put inside the crown by a command). */
         fun moveTreeOntoHead()
+
+        /**
+         * Debug `ray=<branch id>|tree|ring|floor|off|tap` (tap: the trigger once): a stand-in controller ray from the right hand's usual place (the emulator
+         * has no controller pose) aimed at that target, drawn and hit-tested like the real one; `off` = the real controller.
+         */
+        fun aimRay(target: String): String
     }
 
     @Volatile var host: Host? = null

@@ -38,7 +38,7 @@ S = [
     ("hint_s10", "Orange branches need a cut", "橙色的枝都该剪"),
     ("hint_s19", "Let go to drop · Snaps to the ring", "松手放下 · 拖回虚线圈附近会吸回去"),
     ("hint_s20", "Point at the floor, pull trigger · or pinch", "手柄指向地面按扳机 · 或看着地面捏合"),
-    ("hint_s21", "You are inside the tree · Pull it back", "你在树里面 · 拉远一点或叫回面前"),
+    ("hint_s21", "You are inside the tree · Pull it back", "你在树里面 · 拉远一点或重开面板"),
     ("hint_result", "Tap a row: the tree turns to that branch", "点一行：树转到那根枝"),
     ("exam_note", "Exam: no feedback until Done", "考试：剪的时候不提示"),
     ("ladder_pick", "Tap a bud", "点一个芽"), ("ladder_confirm", "Tap again to cut", "再点一下剪"),
@@ -64,9 +64,9 @@ S = [
     ("action_rejoin", "Undo cut", "接回去"), ("action_got_it", "Got it", "知道了"),
     ("action_again", "Try again", "再剪一次"), ("action_next_lesson", "Next lesson", "下一课"),
     ("action_start", "Start pruning", "开始剪"), ("action_pick", "Pick a lesson", "选一课"),
-    ("action_bring_here", "Bring it here", "叫回面前"), ("action_replant", "Replant", "重新放树"),
+    ("action_bring_here", "Reopen panel", "重开面板"), ("action_replant", "Replant", "重新放树"),
     ("action_rule_card", "Rule card", "口诀卡"), ("action_settings", "Settings", "设置"),
-    ("tab_lesson", "Lesson", "修枝"), ("action_open_panel", "Open panel", "打开面板"), ("rules_this_lesson", "This lesson's rules", "这一课的口诀"),
+    ("tab_lesson", "Lesson", "修枝"), ("action_open_panel", "Open panel", "打开面板"), ("look_level", "Look straight ahead\nand the panel opens", "平视前方\n面板就出来"), ("rules_this_lesson", "This lesson's rules", "这一课的口诀"),
     ("action_quit", "Quit app", "退出应用"), ("action_cancel", "Cancel", "取消"), ("action_quit_short", "Quit", "退出"),
     ("action_clear", "Clear", "清空"), ("action_close", "Close", "关闭"), ("action_retry", "Retry", "重试"),
     ("action_reset_lesson", "Reset lesson", "重置本课"), ("action_reset_all", "Reset all progress", "重置全部进度"),
@@ -108,7 +108,7 @@ S = [
     ("card_title", "Rule card", "口诀卡"),
     ("set_bud_zoom", "Bud zoom", "芽眼放大"), ("set_floor", "Floor height", "地面高度"), ("set_seated", "I am", "我是"), ("set_stand", "Standing", "站着"), ("set_sit", "Seated", "坐着"),
     ("set_sound", "Sound", "声音"), ("set_volume", "Volume", "音量"), ("vol_low", "Low", "低"), ("vol_mid", "Mid", "中"), ("vol_high", "High", "高"),
-    ("set_language", "Language", "语言"), ("set_about", "About", "关于"), ("about_version", "Pruning Class v0.1.1", "修枝课 v0.1.1"),
+    ("set_language", "Language", "语言"), ("set_about", "About", "关于"), ("about_version", "Pruning Class v0.1.3", "修枝课 v0.1.3"),
     ("on", "On", "开"), ("off", "Off", "关"), ("lang_zh", "中", "中"), ("lang_en", "EN", "EN"),
     ("floor_virtual", "Virtual %1$+d cm", "虚拟 %1$+d cm"), ("floor_real", "Real floor", "真实地面"),
     ("dialog_title", "Not available now", "现在用不了"), ("dialog_not_full_space", "Not in Full Space", "不在全空间"), ("dialog_no_head", "Head tracking is not available", "头部追踪不可用"),
@@ -116,7 +116,7 @@ S = [
 
 
 def esc(v: str) -> str:
-    return v.replace("&", "&amp;").replace("'", "\\'").replace("<", "&lt;")
+    return v.replace("&", "&amp;").replace("'", "\\'").replace("<", "&lt;").replace("\n", "\\n")
 
 
 def main():

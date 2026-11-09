@@ -42,20 +42,28 @@ fun PcScreen() {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val navigator = LocalSpatialNavigator.current
 
-    // the main window opens with the Stage; its × closes it and the Stage's chip opens it again
-    fun openWindow() {
+    // the main window opens with the Stage; its × closes it and the Stage's chip opens it again. A Planar window opens
+    // on the line of sight and stays tilted if opened while looking down (D9): every open waits for a level head
+    // (PcShared.askOpen, native-window-move §7 item 9); a minimised window is restored where it was
+    fun openWindow(why: String) {
         if (PcShared.windowMinimised && navigator.restoreWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG)) {
-            PcLog.i("WINDOW restore (was minimised)")
+            PcLog.i("WINDOW restore (was minimised) why=$why")
             return
         }
-        navigator.openWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG)
+        PcShared.askOpen(why)
     }
     fun closeWindow() = navigator.closeWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG)
+    DisposableEffect(navigator) {
+        PcShared.opener = { navigator.openWindowContainer(PcShared.WINDOW_ID, PcShared.WINDOW_TAG) }
+        onDispose {
+            PcShared.cancelOpen()
+            PcShared.opener = null
+        }
+    }
     LaunchedEffect(Unit) {
         // the ViewModel outlives a Stage (process level): a new Stage starts from S00 like a cold start
         viewModel.stageStarted()
-        PcLog.i("WINDOW open (Stage started)")
-        openWindow()
+        openWindow("stage")
     }
     // [Bring here] (settings): the window cannot be moved by code; closed and opened again it comes back in front of
     // the head. Open only after ON_DESTROY: an open right after a close is swallowed (native-window-move §3.5)
@@ -68,7 +76,7 @@ fun PcScreen() {
             PcLog.i("WINDOW recall: close, open after ON_DESTROY")
             closeWindow()
         } else {
-            openWindow()
+            openWindow("recall")
         }
     }
     // pending until the window is back (it takes 3 - 6 s to appear): the "open panel" chip stays hidden meanwhile
@@ -78,7 +86,7 @@ fun PcScreen() {
         if (PcShared.window == "ON_DESTROY" && !recallOpened) {
             recallOpened = true
             PcLog.i("WINDOW recall: open")
-            openWindow()
+            openWindow("recall")
         } else if (PcShared.windowOpen && recallOpened) {
             recallOpened = false
             PcShared.recallPending = false
@@ -105,7 +113,7 @@ fun PcScreen() {
 
                 override fun pressControl(name: String): Boolean = PcProbe.click(name)
 
-                override fun window(open: Boolean) = if (open) openWindow() else closeWindow()
+                override fun window(open: Boolean) = if (open) openWindow("debug") else closeWindow()
             }
         PcLog.i("STAGE enter")
         onDispose {
@@ -146,6 +154,7 @@ fun PcScreen() {
                 // design D26 / template exit: release tracking / audio and the window, close the Stage, remove the tasks, end
                 PcEffect.QuitApp ->
                     exitApp(context, navigator) {
+                        PcShared.cancelOpen()
                         scene.detach()
                         closeWindow()
                     }
@@ -159,6 +168,6 @@ fun PcScreen() {
         true
     }
     CompositionLocalProvider(LocalPcResources provides resources) {
-        PcStage(state = state, scene = scene, onEvent = viewModel::onEvent, onOpenWindow = ::openWindow)
+        PcStage(state = state, scene = scene, onEvent = viewModel::onEvent, onOpenWindow = { openWindow("chip") })
     }
 }

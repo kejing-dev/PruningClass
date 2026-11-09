@@ -2,6 +2,7 @@ package io.embodit.pruningclass.platform.input
 
 import com.pico.spatial.tracking.DataProvider
 import com.pico.spatial.tracking.controller.ControllerActionData
+import com.pico.spatial.tracking.controller.ControllerTrackingData
 import com.pico.spatial.tracking.controller.ControllerTrackingProvider
 import io.embodit.pruningclass.domain.model.PointerRay
 import io.embodit.pruningclass.domain.model.Quat4
@@ -9,6 +10,7 @@ import io.embodit.pruningclass.domain.model.Vec3
 import io.embodit.pruningclass.platform.PcLog
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 /** What the controller delivers in one frame, Stage space. */
 data class ControllerSample(
@@ -115,6 +117,7 @@ class ControllerInput {
         val position = Vec3(pose.position.x, pose.position.y, pose.position.z)
         val rotation = Quat4(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w)
         if (!position.isFinite()) return null
+        if (stale(stamp(data), position, rotation)) return null
         val forward = rotation.rotate(Vec3.AHEAD)
         if (!forward.isFinite() || forward.length < 0.5f) return null
         val stick = java.lang.Float.intBitsToFloat((if (pickRight) rightStick else leftStick).get())
@@ -128,7 +131,39 @@ class ControllerInput {
         )
     }
 
+    // A controller that stops tracking may keep its last pose: a pose whose data time stamp and value have not moved for
+    // STALE_MS is treated as lost (only once the time stamp has been seen to move, so a source without one never hides)
+    private var lastStamp = Long.MIN_VALUE
+    private var stampMoved = false
+    private var lastPos = Vec3(0f, 0f, 0f)
+    private var lastRot = Quat4(0f, 0f, 0f, 1f)
+    private var stillSinceMs = 0L
+    private var wasStale = false
+
+    private fun stale(stamp: Long?, position: Vec3, rotation: Quat4): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val samePose = position.distanceTo(lastPos) < 1e-5f && abs(rotation.w - lastRot.w) < 1e-6f && abs(rotation.x - lastRot.x) < 1e-6f
+        val sameStamp = stamp == null || stamp == lastStamp
+        if (stamp != null && lastStamp != Long.MIN_VALUE && stamp != lastStamp) stampMoved = true
+        if (!(samePose && sameStamp)) stillSinceMs = now
+        if (stamp != null) lastStamp = stamp
+        lastPos = position
+        lastRot = rotation
+        val isStale = stampMoved && samePose && sameStamp && now - stillSinceMs > STALE_MS
+        if (isStale != wasStale) PcLog.i("TRACK controller ${if (isStale) "lost (pose frozen ${now - stillSinceMs} ms)" else "tracked again"}")
+        wasStale = isStale
+        return isStale
+    }
+
+    /** The data's own time stamp (internal in the SDK: read by reflection, null when it cannot be read). */
+    private fun stamp(data: Any): Long? = runCatching { stampGetter?.invoke(data) as? Long }.getOrNull()
+
+    private val stampGetter: java.lang.reflect.Method? by lazy {
+        runCatching { ControllerTrackingData::class.java.methods.firstOrNull { it.name.startsWith("getTimestamp") && it.parameterCount == 0 } }.getOrNull()
+    }
+
     companion object {
+        private const val STALE_MS = 2_000L
         private const val SWITCH_AT = 0.15f
         private const val REST_BELOW = 0.05f
     }

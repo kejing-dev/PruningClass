@@ -106,6 +106,7 @@ internal object DebugCommands {
                 host.dispatch(PcEvent.DebugExplain(r))
             }
             "rotate" -> scene?.rotate(arg.toFloat())
+            "ray" -> PcLog.i("CMD ray ${scene?.aimRay(arg) ?: "no scene"}")
             "turn" -> host.dispatch(PcEvent.Turn(arg.toFloat()))
             "dist" -> scene?.distance(arg.toFloat())
             "window" -> host.window(!arg.equals("close", true))

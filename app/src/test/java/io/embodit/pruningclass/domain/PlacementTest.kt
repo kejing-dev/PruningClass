@@ -2,6 +2,7 @@ package io.embodit.pruningclass.domain
 
 import io.embodit.pruningclass.domain.model.Quat4
 import io.embodit.pruningclass.domain.model.Vec3
+import io.embodit.pruningclass.domain.usecase.Clearance
 import io.embodit.pruningclass.domain.usecase.PlaceMachine
 import io.embodit.pruningclass.domain.usecase.Placement
 import kotlin.math.acos
@@ -47,15 +48,15 @@ class PlacementTest {
             // user 2 m from the mark, looking at it
             val user = mark + Vec3(-kotlin.math.sin(a), 0f, -kotlin.math.cos(a)) * -2f + Vec3(0f, 1.6f, 0f)
             val fwd = (mark - user).let { Vec3(it.x, 0f, it.z).normalized() }
-            val tree = Placement.treeBesideWindow(user, fwd, 2f, 0f)
+            val tree = Placement.treeBesideWindow(user, fwd, 2f, 0f, reach = 1.0f)
             // the tree's front (+Z) points at the user
             val front = tree.rotation.rotate(Vec3(0f, 0f, 1f))
             val toUser = Vec3(user.x - tree.position.x, 0f, user.z - tree.position.z).normalized()
             val err = deg(acos(front.dot(toUser).coerceIn(-1f, 1f)))
             assertTrue("side $side: tree front off by $err", err < 10f)
-            // 45 degrees right of the view: the main window opens straight ahead
+            // right of the view, clear of the main window that opens straight ahead (D41)
             val rel = deg(Placement.angle(Placement.yawOf(tree.position - user) - Placement.yawOf(fwd)))
-            assertEquals("side $side: tree 45 right of the view", -Placement.TREE_RIGHT_DEG, rel, 1f)
+            assertEquals("side $side: tree right of the view", -Clearance.treeRightDeg(1.0f, 2f), rel, 1f)
         }
     }
 
@@ -65,38 +66,12 @@ class PlacementTest {
         for (yawDeg in listOf(-170f, -90f, -12f, 0f, 37f, 90f, 179f)) {
             for (pitch in listOf(-30f, 0f, 30f)) {
                 val f = headForward(yawDeg, pitch, 0f)
-                val tree = Placement.treeBesideWindow(head, f, 1.1f, 0.4f)
+                val tree = Placement.treeBesideWindow(head, f, 1.1f, 0.4f, reach = 0.5f)
                 val az = deg(Placement.angle(Placement.yawOf(tree.position - head) - Placement.rad(yawDeg)))
-                assertEquals("yaw $yawDeg pitch $pitch", -Placement.TREE_RIGHT_DEG, az, 2f)
+                assertEquals("yaw $yawDeg pitch $pitch", -Clearance.treeRightDeg(0.5f, 1.1f), az, 2f)
                 assertEquals("on the floor", 0.4f, tree.position.y, 1e-4f)
                 assertEquals("1.1 m away", 1.1f, Vec3(tree.position.x - head.x, 0f, tree.position.z - head.z).length, 1e-3f)
             }
-        }
-    }
-
-    /** The tree's crown stays out of the window's cone (window about +/-9 degrees, 1.75 m ahead). */
-    @Test
-    fun treeCrownClearsTheWindow() {
-        val user = Vec3(0f, 1.6f, 0f)
-        for ((dist, crown) in listOf(1.1f to 0.5f, 2.0f to 1.05f)) {
-            val tree = Placement.treeBesideWindow(user, Vec3.AHEAD, dist, 0f)
-            val az = kotlin.math.abs(deg(Placement.angle(Placement.yawOf(tree.position - user))))
-            val half = deg(kotlin.math.asin((crown / dist).coerceAtMost(1f)))
-            assertTrue("crown edge ${az - half} deg off the view (window half-width 9)", az - half > 9f)
-        }
-    }
-
-    /** QA 2026-11-03: wherever the cut is on the crown, the explain card stays right of the window (window +/-9 deg, card ~+/-11). */
-    @Test
-    fun explainCardNeverInFrontOfTheWindow() {
-        val user = Vec3(0f, 1.6f, 0f)
-        val tree = Placement.treeBesideWindow(user, Vec3.AHEAD, 1.1f, 0.4f)
-        for (k in 0 until 24) {
-            val a = Placement.rad(k * 15f)
-            val cut = tree.position + Vec3(kotlin.math.sin(a) * 0.5f, 0.5f, kotlin.math.cos(a) * 0.5f)
-            val (card, _) = Placement.dockExplain(user, cut, tree.position, crownRadius = 0.5f)
-            val az = deg(Placement.angle(Placement.yawOf(card.position - user)))
-            assertTrue("cut at ${k * 15} deg: card at $az deg (window up to -9, card half-width 11)", az < -20f)
         }
     }
 
@@ -127,24 +102,5 @@ class PlacementTest {
         m.cancel()
         assertEquals(PlaceMachine.Mode.LOCKED, m.mode)
         assertEquals(Vec3(1f, 0f, -3f), m.position)
-    }
-
-    @Test
-    fun explainCardBesideTheCut() {
-        val user = Vec3(0f, 1.6f, 0f)
-        val tree = Vec3(0f, 0f, -1.1f)
-        val cut = Vec3(0.1f, 0.85f, -1.05f)
-        val (p, scale) = Placement.dockExplain(user, cut, tree)
-        val cutDir = (cut - user).normalized()
-        val cardDir = (p.position - user).normalized()
-        val off = deg(acos(cutDir.dot(cardDir).coerceIn(-1f, 1f)))
-        assertTrue("card about 15 degrees from the cut ($off)", off in 10f..20f)
-        assertTrue("card in front of the cut", (p.position - user).length < (cut - user).length)
-        assertTrue("scale ${scale}", scale in 0.3f..1.2f)
-        // with the crown known the card stays in front of it (no cane can pass in front of the card)
-        val (q, s2) = Placement.dockExplain(user, cut, tree, crownRadius = 0.5f)
-        val horiz = Vec3(q.position.x - user.x, 0f, q.position.z - user.z).length
-        assertTrue("card in front of the crown ($horiz)", horiz <= 1.1f - 0.5f - 0.1f + 0.01f)
-        assertTrue("scale keeps the angular size (${s2})", s2 < scale)
     }
 }

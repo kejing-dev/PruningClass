@@ -238,7 +238,8 @@ private fun LessonCard(state: PcUiState, l: LessonId, onEvent: (PcEvent) -> Unit
                 Text(text = "${l.number}", color = PicoTheme.colorScheme.labelPrimary, style = PcType.title)
                 if (l.exam) Chipish(rs(R.string.chip_exam), alert = false)
             }
-            Text(text = rsn("card_$l"), color = PicoTheme.colorScheme.labelPrimary, style = PcType.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val name = rsn("card_$l")
+            Text(text = name, color = PicoTheme.colorScheme.labelPrimary, style = PcType.title, maxLines = 2, overflow = TextOverflow.Ellipsis, onTextLayout = overflowLog(name))
             Spacer(Modifier.weight(1f))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (rec?.passed == true) Icon(painter = painterResource(R.drawable.ic_check), contentDescription = null, modifier = Modifier.size(18.dp), tint = PicoTheme.colorScheme.labelPrimary)
@@ -277,6 +278,7 @@ internal fun CardPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) -> U
             val recs = LessonId.of(sp).map { state.records[it]?.best?.takeIf { b -> b >= 0 }?.let { b -> "$b%" } ?: "—" }
             Label(rs(R.string.graduate_scores, recs[0], recs[1], recs[2]))
         } else {
+            // gate:allow tabs-segment in-page option (rose / apple card on the rule-card page), not a page switch: pages switch only by the native TabBar
             Segments(listOf("card_rose" to rsn("species_rose"), "card_apple" to rsn("species_apple")), sp.ordinal, { onEvent(PcEvent.CardSpecies(Species.entries[it])) }, width = 260.dp, height = 48.dp)
         }
         for (r in Rules.of(sp)) {
@@ -418,6 +420,7 @@ internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
         }
         // the TabBar shows icons only: the page names itself (factory native-window-move §3.6)
         Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) { Title(rs(R.string.action_settings)) }
+        // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_zoom_in, rs(R.string.set_bud_zoom)) { Segments(listOf("zoom_on" to rs(R.string.on), "zoom_off" to rs(R.string.off)), if (s.budZoom) 0 else 1, { onEvent(PcEvent.BudZoom(it == 0)) }, width = 220.dp) }
         row(R.drawable.ic_height, rs(R.string.set_floor)) {
             Row(Modifier.width(220.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -426,12 +429,16 @@ internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
                 Key("floor_up", R.drawable.ic_add, "+", enabled = state.virtualFloor) { onEvent(PcEvent.FloorStep(1)) }
             }
         }
+        // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_chair, rs(R.string.set_seated)) { Segments(listOf("stand" to rs(R.string.set_stand), "sit" to rs(R.string.set_sit)), if (s.seated) 1 else 0, { onEvent(PcEvent.Seated(it == 1)) }, width = 220.dp) }
         row(R.drawable.ic_my_location, rs(R.string.action_bring_here)) { WordButton("set_recall", rs(R.string.action_bring_here), { onEvent(PcEvent.Recall) }, enabled = inLesson, minWidth = 220.dp, height = 48.dp) }
         row(R.drawable.ic_park, rs(R.string.action_replant)) { WordButton("set_replant", rs(R.string.action_replant), { onEvent(PcEvent.Replant) }, enabled = inLesson, minWidth = 220.dp, height = 48.dp) }
+        // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_volume_up, rs(R.string.set_sound)) { Segments(listOf("sound_on" to rs(R.string.on), "sound_off" to rs(R.string.off)), if (s.sound) 0 else 1, { onEvent(PcEvent.Sound(it == 0)) }, width = 220.dp) }
+        // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_volume_up, rs(R.string.set_volume)) { Segments(listOf("vol_low" to rs(R.string.vol_low), "vol_mid" to rs(R.string.vol_mid), "vol_high" to rs(R.string.vol_high)), s.volume.ordinal, { onEvent(PcEvent.VolumeSet(Volume.entries[it])) }, width = 220.dp) }
         val langSel = when (s.language) { LanguagePref.ZH -> 0; LanguagePref.EN -> 1; LanguagePref.SYSTEM -> if (zh) 0 else 1 }
+        // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_language, rs(R.string.set_language)) { Segments(listOf("lang_zh" to rs(R.string.lang_zh), "lang_en" to rs(R.string.lang_en)), langSel, { onEvent(PcEvent.Language(if (it == 0) LanguagePref.ZH else LanguagePref.EN)) }, width = 220.dp) }
         row(R.drawable.ic_restart_alt, rs(R.string.action_reset_lesson)) { WordButton("set_reset_lesson", rs(R.string.action_reset_lesson), { onEvent(PcEvent.ResetLesson) }, enabled = inLesson, minWidth = 220.dp, height = 48.dp) }
         row(R.drawable.ic_restart_alt, rs(R.string.action_reset_all)) { WordButton("set_reset_all", rs(R.string.action_reset_all), { onEvent(PcEvent.AskResetAll) }, danger = true, minWidth = 220.dp, height = 48.dp) }

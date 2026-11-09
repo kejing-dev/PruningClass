@@ -221,7 +221,7 @@ internal fun MainButton(name: String, label: String, iconRes: Int, enabled: Bool
     ) {
         Icon(painter = painterResource(iconRes), contentDescription = null, modifier = Modifier.size(20.dp), tint = ink)
         Spacer(modifier = Modifier.width(8.dp))
-        Text(text = label, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, style = PcType.title)
+        Text(text = label, color = ink, maxLines = 1, overflow = TextOverflow.Ellipsis, style = PcType.title, onTextLayout = overflowLog(label))
     }
 }
 

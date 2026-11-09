@@ -18,11 +18,14 @@ import com.pico.spatial.core.ecs.resource.Material
 import com.pico.spatial.core.ecs.resource.MeshResource
 import com.pico.spatial.core.ecs.resource.PhysicsMaterialResource
 import com.pico.spatial.core.ecs.resource.ShapeResource
+import com.pico.spatial.core.ecs.simulation.CollisionCastHitMode
+import com.pico.spatial.core.ecs.simulation.CollisionGroup
 import com.pico.spatial.core.math.Quat
 import com.pico.spatial.core.math.Vector3
 import com.pico.spatial.ui.foundation.content.SpatialViewAttachments
 import com.pico.spatial.ui.foundation.gesture.SpatialDragValue
 import com.pico.spatial.ui.foundation.gesture.SpatialTapValue
+import io.embodit.pruningclass.domain.model.PointerRay
 import io.embodit.pruningclass.domain.model.Quat4
 import io.embodit.pruningclass.domain.model.SurfaceKind
 import io.embodit.pruningclass.domain.model.Vec3
@@ -34,12 +37,14 @@ import io.embodit.pruningclass.domain.tree.NextYear
 import io.embodit.pruningclass.domain.tree.Species
 import io.embodit.pruningclass.domain.tree.Status
 import io.embodit.pruningclass.domain.tree.Tree
+import io.embodit.pruningclass.domain.usecase.Clearance
 import io.embodit.pruningclass.domain.usecase.PlaceMachine
 import io.embodit.pruningclass.domain.usecase.Placement
 import io.embodit.pruningclass.domain.usecase.Upright
 import io.embodit.pruningclass.platform.PcGraph
 import io.embodit.pruningclass.platform.PcLog
 import io.embodit.pruningclass.platform.audio.Sfx
+import io.embodit.pruningclass.platform.input.ControllerSample
 import io.embodit.pruningclass.platform.sense.PlaneTracker
 import io.embodit.pruningclass.platform.tracking.HeadPose
 import io.embodit.pruningclass.ui.pc.PcEvent
@@ -52,6 +57,7 @@ import io.embodit.pruningclass.ui.pc.debug.PcProbe
 import io.embodit.pruningclass.ui.theme.PcColors
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.asin
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -125,6 +131,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     // ---- the tree
     private var treeRoot: Entity? = null
     private var tree: Tree? = null
+
+    /** The tree's reach this year and next (Clearance.reach), at least the rose's stand and pot: D41 clearances. */
+    private var treeReach = 0.5f
     private var treeKey: Pair<LessonId, Int>? = null
     private val branchViews = HashMap<Int, BranchView>()
     private var budEntity: Entity? = null
@@ -173,6 +182,13 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private var turningSent = false
     private var movingStickSent = false
     private var drag: DragKind? = null
+    private var rayBeam: Entity? = null
+    private var rayDot: Entity? = null
+    private var rayTriggerWas = false
+    private var rayShown = false
+    private var lastTapId = -1L
+    private var lastTapMs = 0L
+    private var lastTapSource = ""
     private var dragPxToM = 0.001f
     private var insideSent = false
     private var rotateSeen = 0
@@ -203,6 +219,15 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
 
     // ---- Stage panels (explain card, open-window chip)
     private var chipPose: Upright? = null
+    private var hintShown = false
+    private var explainGrown = false
+    private var explainSpin = 0f
+    @Volatile private var debugAim: String? = null
+    private var rayTargetLogged: String? = null
+    @Volatile private var debugPressFrames = 0
+
+    /** Where each ladder ring was last put (debug `ray=ring`). */
+    private val ringAt = HashMap<Int, Vec3>()
     private var explainLine: Strip? = null
     private var explainSeen = -1
     private var explainPose: Pair<Upright, Float>? = null
@@ -337,7 +362,10 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         ladderRoot = Entity().named("ladder").also { root.addChild(it); it.enabled = false }
         for (i in 0 until LADDER_POOL) {
             val r = model(meshes.ring, mats.ladder, "ladder_ring_$i")
-            r.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createSphere(1f)), physicsMaterial = PhysicsMaterialResource()))
+            // the ring is scaled (dia / 2, 1, dia / 2): a flat box, 1.2 x the plate, 3 cm thick (createBox takes half sizes:
+            // 2.4 overlapped the next ring and the ray picked the bud above, QA v0.1.3) (a unit sphere stayed 1 m tall
+            // in Y and caught rays and taps a metre away from the ladder, v0.1.3 self-test)
+            r.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1.2f, 0.015f, 1.2f))), physicsMaterial = PhysicsMaterialResource()))
             r.components.set(InteractableComponent())
             ladderRoot!!.addChild(r)
             r.enabled = false
@@ -352,11 +380,16 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         }
         ladderTag = model(meshes.label, mats.ladder, "ladder_tag").also { ladderRoot!!.addChild(it); it.enabled = false }
         previewDisc = model(meshes.disc, mats.preview, "preview_disc").also {
-            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createSphere(1.4f)), physicsMaterial = PhysicsMaterialResource()))
+            // scaled (r, 1, r) like the ladder rings: a flat box, not a sphere that stays 1.4 m in Y
+            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1.4f, 0.015f, 1.4f))), physicsMaterial = PhysicsMaterialResource()))
             it.components.set(InteractableComponent())
             root.addChild(it)
             it.enabled = false
         }
+        // the app's own controller ray: the device showed none in this Stage (v0.1.0 device feedback), so the ray is drawn
+        // here from the controller pose and the trigger acts on what it hits, like the system pointer
+        rayBeam = model(meshes.cube, mats.rayBeam, "controllerRay").also { root.addChild(it); it.enabled = false }
+        rayDot = model(meshes.disc, mats.rayDot, "controllerRayDot").also { root.addChild(it); it.enabled = false }
         scissors = Entity().named("scissors").also { s ->
             root.addChild(s)
             for (k in 0 until 2) s.addChild(model(meshes.cube, mats.scissors, "blade_$k").also { it.setLocal(rotation = Quat4.axisAngle(Vec3(0f, 0f, 1f), (if (k == 0) 0.45f else -0.45f)), scale = Vec3(0.012f, 0.12f, 0.004f)) })
@@ -460,6 +493,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         lastCutCount = ui.cuts.size
         val t = TreeCache.get(lesson)
         tree = t
+        treeReach = reaches.getOrPut(lesson) { maxOf(Clearance.reach(t), 0.30f) }
         PcLog.i("TREE build lesson=$lesson branches=${t.branches.size} selectable=${t.selectable.size}")
         if (t.species == Species.ROSE) {
             // stand 0.40 m (top 0.40 x 0.03 x 0.40, four legs) and the pot 0.35 x 0.30 m with soil, as in the mock-up
@@ -581,6 +615,8 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val dt = if (lastFrameMs == 0L) 0f else ((now - lastFrameMs) / 1000f).coerceIn(0f, 0.2f)
         lastFrameMs = now
         readHead(now)
+        // the window opens only with the head level (PcShared.askOpen); null = no valid head pose yet
+        PcShared.stepGate(now, if (hasHead) Placement.deg(asin(pose.forward.y.coerceIn(-1f, 1f))) else null)
         val rig = rig ?: return
         rig.onFrame(now)
         if (hasHead) rig.stowBehind(pose.view)
@@ -598,6 +634,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         floorFrame(now)
         placeFrame(now)
         stickFrame(now, dt)
+        rayFrame(now)
         spinFrame(now)
         treeFrame(now)
         ladderFrame()
@@ -707,7 +744,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
 
     // ---- placement (design `rules.placement.autoPlace`) -----------------------------------
 
-    private fun distances(t: Tree): Pair<Float, Float> = if (t.species == Species.ROSE) 1.10f to 2.00f else 2.00f to 3.20f
+    // placed at the first value, which is also the nearest the stick pulls it: nearer, the crown would reach into the
+    // window's 10 degrees (D41); the apple starts at 2.60 (design 2.00 - 3.20) so it stands about 61 degrees right, not 74
+    private fun distances(t: Tree): Pair<Float, Float> = if (t.species == Species.ROSE) 1.10f to 2.00f else 2.60f to 3.20f
 
     private fun placeFrame(now: Long) {
         val t = tree ?: return
@@ -721,22 +760,47 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             placeSerialSeen = ui.placeSerial
             // beside the main window, not under it: placing follows a press in the window (a lesson card, [Try again],
             // [Bring here], which also reopens the window in front), so the user faces the window now (native-window-move §4)
-            val p = Placement.treeBesideWindow(pose.position, pose.forward, distances(t).first, floorY!!)
-            placed = p
-            ringPose = p
-            placeMachine.set(p.position)
-            spin = 0f
-            spinStartMs = NEVER
+            placeTree(t, now, "press")
             fadeStartMs = now
-            PcLog.i("PC-PLACE tree=${PcLog.pos(p.position)} yaw=${PcLog.f(Math.toDegrees(p.yaw.toDouble()).toFloat(), 1)} head=${PcLog.pos(pose.position)} dist=${PcLog.f(distances(t).first)} floorY=${PcLog.f(floorY!!, 3)} virtual=$floorVirtual")
-            logIndex = 0
-            placedAtMs = now
         }
+        windowCheck(t, now)
         if (!placedSent && ui.phase == Phase.PLACING && fadeStartMs != NEVER && now - fadeStartMs >= FADE_MS && placeSerialSeen == ui.placeSerial) {
             placedSent = true
             sink(PcEvent.Placed)
         }
     }
+
+    private fun placeTree(t: Tree, now: Long, why: String) {
+        val p = Placement.treeBesideWindow(pose.position, pose.forward, distances(t).first, floorY!!, treeReach)
+        placed = p
+        ringPose = p
+        placeMachine.set(p.position)
+        spin = 0f
+        spinStartMs = NEVER
+        explainSeen = -1
+        PcLog.i("PC-PLACE why=$why tree=${PcLog.pos(p.position)} yaw=${PcLog.f(Math.toDegrees(p.yaw.toDouble()).toFloat(), 1)} head=${PcLog.pos(pose.position)} dist=${PcLog.f(distances(t).first)} reach=${PcLog.f(treeReach)} right=${PcLog.f(Clearance.treeRightDeg(treeReach, distances(t).first), 1)} floorY=${PcLog.f(floorY!!, 3)} virtual=$floorVirtual")
+        logIndex = 0
+        placedAtMs = now
+    }
+
+    /**
+     * A window that is created again (the chip after its x, [Bring here]'s reopen) opens straight ahead of the head at
+     * that moment, wherever the tree is: when it would come within [Clearance.CLEAR_DEG] of the tree, the tree goes
+     * beside the new window (D41, QA v0.1.3). A restored (minimised) window keeps its old place.
+     */
+    private fun windowCheck(t: Tree, now: Long) {
+        // ON_CREATE .. ON_RESUME can pass between two frames: "was destroyed, is open now" is a new window
+        if (PcShared.window == "ON_DESTROY") windowGone = true
+        if (!windowGone || !PcShared.windowOpen) return
+        windowGone = false
+        val p = placed ?: return
+        if (!ui.phase.inLesson || floorY == null) return
+        val gap = Clearance.windowGapDeg(pose.position, Placement.yawOf(pose.forward), p.position, treeReach)
+        PcLog.i("PC-CLEAR window created gap=${PcLog.f(gap, 1)}")
+        if (gap < Clearance.CLEAR_DEG) placeTree(t, now, "window")
+    }
+
+    private var windowGone = false
 
     private var placedAtMs = NEVER
 
@@ -996,6 +1060,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             r.show(true)
             r.setMaterial(if (active) mats.ladderActive else mats.ladder)
             r.setLocal(position = at, rotation = face * PLATE, scale = Vec3(dia / 2f, 1f, dia / 2f))
+            ringAt[i] = at
             val text = when (k) {
                 0 -> "✕"
                 MORE_UP -> "+"
@@ -1214,13 +1279,31 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     /**
      * The "open panel" chip while the main window is closed (its ×) or minimised: 0.8 m ahead, 15 degrees below the
      * eyes and 20 degrees left (the tree stands to the right), yaw only; placed when it appears, again only if it ends up
-     * more than 70 degrees off the view (factory rule 2026-10-29).
+     * more than 70 degrees off the view (factory rule 2026-10-29). The same slot is the "look straight ahead" plate
+     * while an open waits for a level head (PcShared.levelHint): on the line of sight (pitch clamped to 40 degrees),
+     * 0.75 m away, upright, following the view.
      */
     private fun placePanels(rig: PanelRig, now: Long) {
         if (!hasHead) return
         val slot = rig[PanelSpec.OPEN] ?: return
-        if (!PcShared.windowClosed || PcShared.recallPending) {
-            if (chipPose != null) PcLog.i("PANEL chip hidden (window ${PcShared.window})")
+        if (PcShared.levelHint) {
+            if (!hintShown) PcLog.i("PANEL level hint shown pitch=${PcLog.f(Placement.deg(asin(pose.forward.y.coerceIn(-1f, 1f))), 1)}")
+            hintShown = true
+            chipPose = null
+            val pitch = asin(pose.forward.y.coerceIn(-1f, 1f)).coerceIn(-Placement.rad(HINT_PITCH_MAX), Placement.rad(HINT_PITCH_MAX))
+            val yaw = Placement.yawOf(pose.forward)
+            val p = pose.position + Placement.dirOfYaw(yaw) * (HINT_DIST * cos(pitch)) + Vec3(0f, HINT_DIST * sin(pitch), 0f)
+            val u = Upright(p, yaw)
+            slot.place(u.position, u.rotation, PanelSpec.SCALE)
+            return
+        }
+        if (hintShown) {
+            hintShown = false
+            PcLog.i("PANEL level hint hidden")
+        }
+        val opening = PcShared.openWaiting || now - PcShared.openedMs < CHIP_AFTER_OPEN_MS
+        if (!PcShared.windowClosed || PcShared.recallPending || opening) {
+            if (chipPose != null) PcLog.i("PANEL chip hidden (window ${PcShared.window}${if (opening) ", opening" else ""})")
             chipPose = null
             slot.hide()
             return
@@ -1228,7 +1311,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val cp = chipPose
         val off = cp?.let { abs(Placement.angle(Placement.yawOf(it.position - pose.position) - Placement.yawOf(pose.forward))) } ?: 0f
         if (cp == null || off > Placement.rad(70f)) {
-            chipPose = Placement.placeUpright(pose.position, pose.forward, 0.8f, 15f, offsetDeg = 20f)
+            val chipW = PanelSpec.size(PanelSpec.OPEN).first * PanelRig.DP_M * PanelSpec.SCALE
+            val treeAt = placed?.position?.takeIf { treeRoot?.enabled == true }
+            chipPose = Placement.chipBesideTree(pose.position, pose.forward, 0.8f, 15f, 20f, chipW, treeAt, treeReach)
             PcLog.i("PANEL chip at=${PcLog.pos(chipPose!!.position)} (window ${PcShared.window})")
         }
         val p = chipPose!!
@@ -1250,11 +1335,18 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val b = t[e.branch] ?: return
         val cutLocal = Judge.ownCuts(ui.cuts)[b.id]?.let { b.pointAt(b.cutS(it)) } ?: b.pointAt(b.length * 0.5f)
         val cut = treeToWorld(cutLocal)
-        if (e.serial != explainSeen) {
+        // beside what is shown now: this year's branches while pruning, next year's growth too on the result page; again
+        // when the tree has been turned (stick X) more than 5 degrees since
+        val grown = ui.phase == Phase.RESULT && ui.view != View.NOW
+        if (e.serial != explainSeen || grown != explainGrown || abs(spin - explainSpin) > Placement.rad(5f)) {
             explainSeen = e.serial
-            explainPose = Placement.dockExplain(pose.position, cut, placed!!.position, t.crownRadius)
+            explainGrown = grown
+            explainSpin = spin
+            val pts = treePoints.getOrPut(t.lesson to grown) { Clearance.points(t, nextYear = grown) }
+            val edge = Clearance.rightEdgeDeg(pose.position, placed!!.position, placed!!.yaw + spin, pts)
+            explainPose = Placement.dockExplain(pose.position, cut, placed!!.position, treeReach, edge, PanelSpec.size(PanelSpec.EXPLAIN).first * PanelRig.DP_M)
             explainInViewMs = NEVER
-            PcLog.i("EXPLAIN reason=${e.reason} branch=${e.branch} at=${PcLog.pos(explainPose!!.first.position)} scale=${PcLog.f(explainPose!!.second)}")
+            PcLog.i("EXPLAIN reason=${e.reason} branch=${e.branch} treeRight=${PcLog.f(edge, 1)} grown=$grown at=${PcLog.pos(explainPose!!.first.position)} scale=${PcLog.f(explainPose!!.second)}")
         }
         val (p, scale) = explainPose ?: return
         slot.place(p.position, p.rotation, scale)
@@ -1283,7 +1375,8 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val toTree = p.position - pose.position
         val treeAz = Math.toDegrees(Placement.angle(Placement.yawOf(toTree) - Placement.yawOf(pose.forward)).toDouble())
         // the main window's pose is the system's (no API reports it): its lifecycle is logged instead
-        PcLog.i(String.format(Locale.US, "PC-LAYOUT t=%ds tree=%s dist=%.2f az=%.1f visible=%s window=%s", logTimes[logIndex - 1] / 1000, PcLog.pos(p.position), Vec3(toTree.x, 0f, toTree.z).length, treeAz, treeRoot?.enabled, PcShared.window))
+        val treeHalf = Clearance.treeHalfDeg(treeReach, Vec3(toTree.x, 0f, toTree.z).length)
+        PcLog.i(String.format(Locale.US, "PC-LAYOUT t=%ds tree=%s dist=%.2f az=%.1f half=%.1f windowHalf=%.1f gap=%.1f visible=%s window=%s", logTimes[logIndex - 1] / 1000, PcLog.pos(p.position), Vec3(toTree.x, 0f, toTree.z).length, treeAz, treeHalf, Clearance.windowHalfDeg, kotlin.math.abs(treeAz) - treeHalf - Clearance.windowHalfDeg, treeRoot?.enabled, PcShared.window))
     }
 
     // =========================================================================================
@@ -1291,10 +1384,28 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     // =========================================================================================
 
     fun onSpatialTap(value: SpatialTapValue) {
-        val target = value.targetEntity
-        val name = runCatching { target?.getName() }.getOrNull() ?: "none"
-        if (target == null) return
+        val target = value.targetEntity ?: return
+        // which input the system pointer reports (Pointer = controller ray, GazePinch / RayBasedPinch / DirectPinch = hands)
+        PcLog.i("TAP system kind=${runCatching { value.interactionKind }.getOrNull()} target=${runCatching { target.getName() }.getOrNull()}")
+        tapEntity(target, value.position.let { Vec3(it.x, it.y, it.z) }, "system")
+    }
+
+    /**
+     * A tap on [target] from the system pointer or the app's controller ray ([source]). One press can reach the app both
+     * ways when the system pointer also works: the second tap on the same entity within 400 ms is dropped.
+     */
+    private fun tapEntity(target: Entity, worldPos: Vec3?, source: String) {
+        val name = runCatching { target.getName() }.getOrNull() ?: "none"
         val now = SystemClock.elapsedRealtime()
+        // one trigger press may arrive twice (our ray and the system pointer), not always on the same entity: whatever the
+        // other source hit within 600 ms is the same press
+        if (source != lastTapSource && now - lastTapMs < 600L) {
+            PcLog.i("TAP $source dropped (same press as $lastTapSource ${now - lastTapMs} ms ago)")
+            return
+        }
+        lastTapId = target.id
+        lastTapMs = now
+        lastTapSource = source
         // ladder rings
         val ri = ladderRings.indexOfFirst { it.id == target.id && it.enabled }
         if (ri >= 0) {
@@ -1316,7 +1427,8 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             return
         }
         if (ui.phase == Phase.RELOCATING && target.id == floorCatcher?.id) {
-            val p = toStage(value.position.x, value.position.y, value.position.z) ?: return
+            val w = worldPos ?: return
+            val p = toStage(w.x, w.y, w.z) ?: return
             placeMachine.aim(Vec3(p.x, floorY ?: p.y, p.z))
             tree?.let { dropGhost(it) }
             return
@@ -1331,6 +1443,116 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         PcLog.i("TAP elsewhere target=$name")
         sink(PcEvent.TappedElsewhere)
     }
+
+    /**
+     * The controller ray (design D1: controller ray + trigger, eye-hand + pinch): a 2.5 mm beam from the aiming controller
+     * to the first collider it hits (at most [RAY_MAX] m), a dot on the hit; a trigger press taps the hit entity. Hidden
+     * without a controller (hand mode: the system's gaze + pinch). The bud cursor (stick) and re-planting keep their own
+     * trigger use.
+     */
+    private fun rayFrame(now: Long) {
+        val beam = rayBeam ?: return
+        val dot = rayDot ?: return
+        val root = stageRoot ?: return
+        val live = ui.phase != Phase.STARTING && ui.phase != Phase.BLOCKED
+        val real = if (live) controller.sample() else null
+        val s = real ?: if (live) debugRaySample() else null
+        if (s == null) {
+            if (rayShown) PcLog.i("RAY hidden (${if (!live) "phase ${ui.phase}" else "no controller pose"})")
+            rayShown = false
+            beam.show(false)
+            dot.show(false)
+            rayTriggerWas = false
+            return
+        }
+        val o = s.ray.origin
+        val d = s.ray.direction
+        if (!rayShown) {
+            // where the ray starts relative to the head (yaw frame: right / up / ahead): a hand is ~0.2 / -0.3 / 0.3 m,
+            // anything else means the controller pose is not in the Stage's space
+            val rel = o - pose.position
+            val yaw = Placement.yawOf(pose.forward)
+            val ahead = Placement.dirOfYaw(yaw)
+            val right = Placement.dirOfYaw(yaw - Placement.rad(90f))
+            PcLog.i("RAY shown (${if (real == null) "debug aim $debugAim" else "controller ${if (s.right) "right" else "left"}"}) from head right=${PcLog.f(rel.dot(right))} up=${PcLog.f(rel.y)} ahead=${PcLog.f(rel.dot(ahead))} phase=${ui.phase}")
+        }
+        rayShown = true
+        val hit =
+            runCatching {
+                root.scene?.rayCast(o.sdk(), d.sdk(), RAY_MAX, CollisionCastHitMode.ALL, CollisionGroup(CollisionGroup.COLLISION_GROUP_ALL), root)
+            }.getOrNull()?.results?.filter { it.entity.id != beam.id && it.entity.id != dot.id && it.entity.enabled }?.minByOrNull { it.distance }
+        // the floor has no collider (D24): the ray meets its plane by arithmetic
+        val fy = floorY
+        val floorT = if (fy != null && d.y < -0.02f) ((fy - o.y) / d.y).takeIf { it in 0.05f..RAY_MAX } else null
+        val onFloor = floorT != null && (hit == null || floorT < hit.distance)
+        val len = (if (onFloor) floorT!! else hit?.distance ?: RAY_IDLE).coerceIn(0.02f, RAY_MAX)
+        beam.show(true)
+        beam.setLocal(position = o + d * (len / 2f), rotation = Quat4.fromTo(Vec3(0f, 0f, 1f), d), scale = Vec3(RAY_WIDTH, RAY_WIDTH, len))
+        if (onFloor || hit != null) {
+            dot.show(true)
+            val normal = if (onFloor) Vec3.UP else -d
+            dot.setLocal(position = o + d * (len - 0.002f) + normal * 0.002f, rotation = Quat4.fromTo(Vec3.UP, normal), scale = Vec3(RAY_DOT, 1f, RAY_DOT))
+        } else {
+            dot.show(false)
+        }
+        val target = if (onFloor) "floor" else hit?.let { runCatching { it.entity.getName() }.getOrNull() } ?: "none"
+        if (target != rayTargetLogged) {
+            rayTargetLogged = target
+            PcLog.i("RAY hit=$target dist=${PcLog.f(len)} phase=${ui.phase}")
+        }
+        val down = s.pressed || s.trigger > 0.6f
+        // only the app's own 3D targets: a panel (the explain card) is pressed by the system pointer, and an unknown hit
+        // must not turn into "tapped elsewhere" (it would drop the selection)
+        if (down && !rayTriggerWas && !onFloor && hit != null && cursor == null && ui.phase != Phase.RELOCATING && isRayTarget(hit.entity)) {
+            PcLog.i("TAP ray target=${runCatching { hit.entity.getName() }.getOrNull()} dist=${PcLog.f(hit.distance)}")
+            tapEntity(hit.entity, null, "ray")
+        }
+        rayTriggerWas = down
+    }
+
+    /** Debug `ray=`: where the right hand usually is, aimed at the chosen target (null when not aiming). */
+    private fun debugRaySample(): ControllerSample? {
+        val aim = debugAim ?: return null
+        val yaw = Placement.yawOf(pose.forward)
+        val ahead = Placement.dirOfYaw(yaw)
+        val right = Placement.dirOfYaw(yaw - Placement.rad(90f))
+        val origin = pose.position + right * 0.18f + ahead * 0.30f - Vec3(0f, 0.30f, 0f)
+        val t = tree
+        val p = placed
+        val target: Vec3 =
+            when {
+                aim == "floor" && p != null && floorY != null -> {
+                    val toUser = Vec3(pose.position.x - p.position.x, 0f, pose.position.z - p.position.z).normalized()
+                    Vec3(p.position.x, floorY!!, p.position.z) + toUser * (treeReach * 0.5f + 0.4f)
+                }
+                aim == "floor" && floorY != null -> pose.position.let { Vec3(it.x, floorY!!, it.z) } + ahead * 1.2f
+                aim.startsWith("ring") -> {
+                    val k = aim.removePrefix("ring").toIntOrNull()
+                    ladderRings.indices.firstOrNull { ladderRings[it].enabled && if (k == null) ladderBud[it] > 0 else ladderBud[it] == k }?.let { ringAt[it] } ?: return null
+                }
+                aim == "tree" && t != null && p != null -> t.selectable.firstOrNull()?.let { treeToWorld(it.pointAt(it.length * 0.6f)) } ?: p.position
+                aim.toIntOrNull() != null && t != null && p != null -> t[aim.toInt()]?.let { treeToWorld(it.pointAt(it.length * 0.6f)) } ?: return null
+                else -> pose.position + ahead * 2f
+            }
+        val dir = (target - origin).normalized()
+        // `ray=tap`: the trigger down for two frames, then up (the ray's own press edge)
+        val down = debugPressFrames > 0
+        if (down) debugPressFrames--
+        return ControllerSample(PointerRay(origin, dir), trigger = if (down) 1f else 0f, pressed = down, stickX = 0f, stickY = 0f, right = true)
+    }
+
+    override fun aimRay(target: String): String {
+        if (target == "tap") {
+            debugPressFrames = 2
+            return "trigger pressed on aim=$debugAim"
+        }
+        debugAim = target.takeIf { it != "off" && it.isNotBlank() }
+        rayTargetLogged = null
+        return "aim=${debugAim ?: "real controller"}"
+    }
+
+    private fun isRayTarget(e: Entity): Boolean =
+        ladderRings.any { it.id == e.id && it.enabled } || e.id == previewDisc?.id || e.id == scissors?.id || branchViews.values.any { it.isGrab(e) }
 
     fun onSpatialDrag(phase: String, value: SpatialDragValue) {
         when (phase) {
@@ -1445,6 +1667,21 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         private const val HEAD_SETTLE_MS = 600L
         private const val FLOOR_TIMEOUT_MS = 5_000L
         private const val FADE_MS = 400f
+
+        /** Controller ray: farthest hit, and the beam length when it hits nothing (m). */
+        private const val RAY_MAX = 4f
+        private const val RAY_WIDTH = 0.003f
+        private const val RAY_DOT = 0.014f
+
+        /** Clearance.reach per lesson (seven next-year builds: once per process). */
+        private val reaches = HashMap<io.embodit.pruningclass.domain.tree.LessonId, Float>()
+
+        /** Clearance.points per lesson, this year / with next year. */
+        private val treePoints = HashMap<Pair<io.embodit.pruningclass.domain.tree.LessonId, Boolean>, List<Vec3>>()
+        private const val HINT_DIST = 0.75f
+        private const val HINT_PITCH_MAX = 40f
+        private const val CHIP_AFTER_OPEN_MS = 8_000L
+        private const val RAY_IDLE = 1.2f
         private const val DEAD = 0.15f
         private val TURN_RATE = Math.toRadians(60.0).toFloat()
         private const val LADDER_POOL = 32

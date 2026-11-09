@@ -48,37 +48,55 @@ object Placement {
     }
 
     /**
-     * Where the tree goes when a lesson starts or is brought back: [TREE_RIGHT_DEG] right of the view, beside the main
-     * window, not between the user and it. The system opens the window straight ahead and no API places it next to Stage
-     * content (factory native-window-move §4: "the 3D content keeps out of the window"). 45 degrees clears the window
-     * (about +/-9 degrees at 1.75 m) and the apple's crown (1.05 m at 2.00 m: +/-31 degrees).
+     * Where the tree goes when a lesson starts or is brought back: right of the view, beside the main window, never
+     * between the user and it. The system opens the window straight ahead and no API places it next to Stage content
+     * (factory native-window-move §4), so the trunk goes [Clearance.treeRightDeg] right: window half-angle + 10 degrees
+     * (D41) + the half-angle of the tree's [reach] (next year's growth included) at [distance].
      */
-    fun treeBesideWindow(head: Vec3, headForward: Vec3, distance: Float, floorY: Float): Upright =
-        treeAhead(head, headForward, distance, floorY, offsetDeg = -TREE_RIGHT_DEG)
-
-    const val TREE_RIGHT_DEG = 45f
+    fun treeBesideWindow(head: Vec3, headForward: Vec3, distance: Float, floorY: Float, reach: Float): Upright =
+        treeAhead(head, headForward, distance, floorY, offsetDeg = -Clearance.treeRightDeg(reach, distance))
 
     /**
-     * Explain card (design `rules.explainDock`): along the user -> cut direction turned 14 degrees right and 6 up, at the cut
-     * distance - 0.2 m, and never inside the crown ([crownRadius] around the trunk, 0.1 m clear: no branch in front of
-     * it); its azimuth relative to the user -> tree line clamped to -15..+45 degrees (+ = right here). Scale keeps the
-     * angular size of a 0.75-scale card at 0.9 m.
+     * Explain card (design `rules.explainDock`, D41): beside the tree on its right (away from the window), never in front
+     * of it: its left edge [Clearance.PLATE_GAP_DEG] right of the tree's right edge as seen from [head] ([treeRightDeg],
+     * degrees right of the head -> trunk line: `Clearance.rightEdgeDeg` over what is shown now); at the crown's front
+     * distance (0.6 - 1.2 m, [reach]), at the cut's height + 6 degrees. Scale keeps the angular size of a 0.75-scale card at
+     * 0.9 m. [cardWidthM] is the card's width at scale 1.
      */
-    fun dockExplain(head: Vec3, cut: Vec3, tree: Vec3, crownRadius: Float = 0f): Pair<Upright, Float> {
-        val toCut = cut - head
-        val crownFront = Vec3(tree.x - head.x, 0f, tree.z - head.z).length - crownRadius - 0.10f
-        val dist = minOf(toCut.length - 0.20f, if (crownRadius > 0f) crownFront else Float.MAX_VALUE).coerceAtLeast(0.45f)
-        val cutYaw = yawOf(toCut)
-        val treeYaw = yawOf(tree - head)
+    fun dockExplain(head: Vec3, cut: Vec3, tree: Vec3, reach: Float, treeRightDeg: Float, cardWidthM: Float): Pair<Upright, Float> {
+        val toTree = Vec3(tree.x - head.x, 0f, tree.z - head.z)
+        val dT = toTree.length.coerceAtLeast(reach + 0.05f)
+        val dist = (dT - reach).coerceIn(0.6f, 1.2f)
+        val scale = 0.75f * dist / 0.9f
+        val cardHalf = deg(atan2(cardWidthM * scale / 2f, dist)) + Clearance.parallaxDeg(dist)
+        val rel = treeRightDeg + Clearance.PLATE_GAP_DEG + cardHalf
         // right = negative yaw
-        var rel = Math.toDegrees(angle(cutYaw - treeYaw).toDouble()).toFloat() - 14f
-        // at most 15 degrees left of the tree line: the main window stands 45 degrees left of it (design said 35)
-        rel = rel.coerceIn(-45f, 15f)
-        val yaw = treeYaw + rad(rel)
+        val yaw = yawOf(toTree) - rad(rel)
+        val toCut = cut - head
         val horiz = Vec3(toCut.x, 0f, toCut.z).length.coerceAtLeast(0.05f)
-        val pitch = atan2(toCut.y, horiz) + rad(6f)
+        val pitch = (atan2(toCut.y, horiz) + rad(6f)).coerceIn(rad(-35f), rad(25f))
         val p = head + dirOfYaw(yaw) * (dist * cos(pitch)) + Vec3(0f, dist * sin(pitch), 0f)
-        return Upright(p, yaw) to (0.75f * dist / 0.9f)
+        return Upright(p, yaw) to scale
+    }
+
+    /**
+     * The "open panel" chip: [distance] ahead, [belowDeg] below the eyes, [offsetDeg] left of the view; when that would
+     * put it over the tree (trunk at [tree], [reach]) it moves to the tree's left edge (the window side), D41.
+     */
+    fun chipBesideTree(head: Vec3, headForward: Vec3, distance: Float, belowDeg: Float, offsetDeg: Float, chipWidthM: Float, tree: Vec3?, reach: Float): Upright {
+        val want = placeUpright(head, headForward, distance, belowDeg, offsetDeg)
+        if (tree == null) return want
+        val toTree = Vec3(tree.x - head.x, 0f, tree.z - head.z)
+        val dT = toTree.length.coerceAtLeast(reach + 0.05f)
+        val treeHalf = Clearance.treeHalfDeg(reach, dT)
+        val chipHalf = deg(atan2(chipWidthM / 2f, distance)) + Clearance.parallaxDeg(distance)
+        val treeYaw = yawOf(toTree)
+        val off = deg(angle(want.yaw - treeYaw))
+        val need = treeHalf + Clearance.PLATE_GAP_DEG + chipHalf
+        if (kotlin.math.abs(off) >= need) return want
+        val yaw = treeYaw + rad(need)
+        val drop = kotlin.math.tan(rad(belowDeg)) * distance
+        return Upright(head + dirOfYaw(yaw) * distance - Vec3(0f, drop, 0f), yaw)
     }
 
     fun angle(a: Float): Float {
@@ -89,6 +107,8 @@ object Placement {
     }
 
     fun rad(d: Float): Float = Math.toRadians(d.toDouble()).toFloat()
+
+    fun deg(r: Float): Float = Math.toDegrees(r.toDouble()).toFloat()
 }
 
 /**

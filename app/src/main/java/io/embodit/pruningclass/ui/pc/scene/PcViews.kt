@@ -83,6 +83,8 @@ internal class PcMaterials(private val shared: SharedResources) {
     val ladderActive: Material = sheer(PcColors.Interaction, 1f)
     val preview: Material = sheer(PcColors.Interaction, 0.6f)
     val scissors: Material = sheer(PcColors.White, 0.5f)
+    val rayBeam: Material = sheer(PcColors.White, 0.85f)
+    val rayDot: Material = unlit(PcColors.Interaction)
     val hint: Material = unlit(PcColors.Alert)
     val selected: Material = sheer(PcColors.White, 0.55f)
     val wrongGhost: Material = sheer(PcColors.Error, 0.4f)

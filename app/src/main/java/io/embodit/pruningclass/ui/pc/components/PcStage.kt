@@ -2,6 +2,7 @@ package io.embodit.pruningclass.ui.pc.components
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,13 +16,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.pico.spatial.ui.design.PicoTheme
+import com.pico.spatial.ui.design.Text
 import com.pico.spatial.ui.foundation.content.SpatialView
 import com.pico.spatial.ui.foundation.gesture.TargetEntity
 import com.pico.spatial.ui.foundation.gesture.detectSpatialDragGesture
 import com.pico.spatial.ui.foundation.gesture.detectSpatialTapGesture
 import io.embodit.pruningclass.R
 import io.embodit.pruningclass.ui.pc.PcEvent
+import io.embodit.pruningclass.ui.pc.PcShared
 import io.embodit.pruningclass.ui.pc.PcUiState
 import io.embodit.pruningclass.ui.pc.debug.LocalProbePanel
 import io.embodit.pruningclass.ui.pc.scene.PanelSpec
@@ -60,7 +66,7 @@ internal fun PcStage(state: PcUiState, scene: PcScene, onEvent: (PcEvent) -> Uni
                 },
         attachments = {
             AttachmentPanel(PanelSpec.EXPLAIN) { PoolPanel(PanelSpec.EXPLAIN, scene, refresh = listOf(state.settings.language, state.explain?.serial)) { inView -> ExplainCard(state, inView, onEvent) } }
-            AttachmentPanel(PanelSpec.OPEN) { PoolPanel(PanelSpec.OPEN, scene, refresh = state.settings.language) { inView -> OpenWindowChip(inView, onOpenWindow) } }
+            AttachmentPanel(PanelSpec.OPEN) { PoolPanel(PanelSpec.OPEN, scene, refresh = listOf(state.settings.language, PcShared.levelHint)) { inView -> OpenWindowChip(inView, onOpenWindow) } }
         },
         update = { _, attachments ->
             @Suppress("UNUSED_EXPRESSION") bindTick
@@ -94,10 +100,30 @@ private fun PoolPanel(id: String, scene: PcScene, refresh: Any? = null, content:
 // (black below the first rows) until the next rebuild
 private val REFRESH_STEPS_MS = longArrayOf(1_500L, 2_500L, 4_000L, 4_000L, 8_000L)
 
-/** "Open panel": the way back to the main window after its × (factory native-window-move §3.3, QA "× → open again"). */
+/**
+ * "Open panel": the way back to the main window after its × (factory native-window-move §3.3, QA "× → open again").
+ * While an open waits for a level head the same slot says "look straight ahead" instead (native-window-move §7 item 9).
+ */
 @Composable
 private fun OpenWindowChip(inView: Boolean, onOpen: () -> Unit) {
     val (w, h) = PanelSpec.size(PanelSpec.OPEN)
+    if (PcShared.levelHint) {
+        Glass(w.dp, h.dp, corner = 24.dp, padding = 12.dp, spacing = 0.dp) {
+            if (!inView) return@Glass
+            val text = rs(R.string.look_level)
+            Text(
+                text = text,
+                color = PicoTheme.colorScheme.labelPrimary,
+                style = PcType.body,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxWidth(),
+                onTextLayout = overflowLog(text),
+            )
+        }
+        return
+    }
     Box(Modifier.size(w.dp, h.dp), contentAlignment = Alignment.Center) {
         if (!inView) return@Box
         WordButton("open_window", rs(R.string.action_open_panel), onOpen, primary = true, minWidth = (w - 16).dp, iconRes = R.drawable.ic_menu_book)
