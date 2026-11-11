@@ -75,6 +75,9 @@ object PcProbe {
          * has no controller pose) aimed at that target, drawn and hit-tested like the real one; `off` = the real controller.
          */
         fun aimRay(target: String): String
+
+        /** Debug `rings`: `RINGS <bud>:(x, y, z) ...` for every ring of the shown ladder (QA / ring_sweep.sh projects them). */
+        fun ringLine(): String
     }
 
     @Volatile var host: Host? = null

@@ -156,6 +156,9 @@ sealed interface PcEvent {
     data class BudTapped(val branch: Int, val bud: Int) : PcEvent
     data object PreviewTapped : PcEvent
     data object TappedElsewhere : PcEvent
+
+    /** [换一根枝] in the window: leave the preview and the selection at once (q3-1: branches cannot be tapped meanwhile). */
+    data object PickAnother : PcEvent
     data class BudCursor(val bud: Int) : PcEvent
     data object Trigger : PcEvent
     data class Turning(val on: Boolean) : PcEvent

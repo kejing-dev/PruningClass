@@ -35,8 +35,8 @@
     <string name="hint_real_floor">已贴到真实地面</string>
     <string name="hint_s06">摇杆左右转树 · 前后推远拉近</string>
     <string name="hint_s07">在芽梯上点一个芽 · 剪刀环整枝去掉</string>
-    <string name="hint_s07_cursor">摇杆上下选芽 · 扳机预览</string>
-    <string name="hint_s08">再点一下剪 · 点别处取消</string>
+    <string name="hint_s07_cursor">摇杆上下选芽 · 换枝按 B/Y 或窗口里的「换一根枝」</string>
+    <string name="hint_s08">再点一下剪 · 点别的芽换位置 · B/Y 取消</string>
     <string name="hint_s10">橙色的枝都该剪</string>
     <string name="hint_s19">松手放下 · 拖回虚线圈附近会吸回去</string>
     <string name="hint_s20">手柄指向地面按扳机 · 或看着地面捏合</string>
@@ -66,6 +66,7 @@
     <string name="action_hint_off">提示：关</string>
     <string name="action_hint_on">提示：开</string>
     <string name="action_turn_left">左转 45°</string>
+    <string name="action_pick_another">换一根枝</string>
     <string name="action_turn_right">右转 45°</string>
     <string name="action_rejoin">接回去</string>
     <string name="action_got_it">知道了</string>
@@ -165,7 +166,7 @@
     <string name="vol_high">高</string>
     <string name="set_language">语言</string>
     <string name="set_about">关于</string>
-    <string name="about_version">修枝课 v0.1.4</string>
+    <string name="about_version">修枝课 v0.1.5</string>
     <string name="on">开</string>
     <string name="off">关</string>
     <string name="lang_zh">中</string>

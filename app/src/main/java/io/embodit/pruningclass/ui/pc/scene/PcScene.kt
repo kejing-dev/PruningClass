@@ -38,6 +38,7 @@ import io.embodit.pruningclass.domain.tree.Species
 import io.embodit.pruningclass.domain.tree.Status
 import io.embodit.pruningclass.domain.tree.Tree
 import io.embodit.pruningclass.domain.usecase.Clearance
+import io.embodit.pruningclass.domain.usecase.Pick
 import io.embodit.pruningclass.domain.usecase.PlaceMachine
 import io.embodit.pruningclass.domain.usecase.Placement
 import io.embodit.pruningclass.domain.usecase.Upright
@@ -138,6 +139,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private val branchViews = HashMap<Int, BranchView>()
     private var budEntity: Entity? = null
     private val potParts = ArrayList<Entity>()
+    private val props = PropModels()
     private var treeBuilt = false
     private var appliedCuts: List<Cut>? = null
     private var appliedZoom: Boolean? = null
@@ -326,6 +328,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val meshes = PcMeshes()
         meshes.build(sh) { pace() }
         ms = meshes
+        // the rose's Tripo stand / pot (assets/models; PropModels), procedural when missing
+        props.load()
+        pace()
         // wood materials (bark texture each) one at a time
         for (w in io.embodit.pruningclass.domain.tree.Wood.entries) {
             mats.wood(w)
@@ -432,6 +437,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         jobs.clear()
         runCatching { rig?.release() }
         runCatching { stageRoot?.destroy(true) }
+        props.close()
         shared?.close()
         shared = null
         stageRoot = null
@@ -498,10 +504,18 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         if (t.species == Species.ROSE) {
             // the 0.40 m oak stand and the terracotta pot with soil (PropMesher, QA round 2 q2-3: no stacked boxes), each with a
             // soft contact shadow; one mesh per job (dynamic mesh pacing)
-            jobs += { potParts += model(PropMesher.stand().mesh("stand"), mats.stand, "stand").also { root.addChild(it) } }
-            jobs += { potParts += model(PropMesher.pot().mesh("pot"), mats.pot, "pot").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H, 0f)); root.addChild(it) } }
             jobs += {
-                potParts += model(PropMesher.soil().mesh("soil"), mats.soil, "soil").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H, 0f)); root.addChild(it) }
+                val e = props.stand?.let { props.instance(it, "stand") } ?: model(PropMesher.stand().mesh("stand"), mats.stand, "stand")
+                potParts += e.also { root.addChild(it) }
+            }
+            jobs += {
+                val tripo = props.pot?.let { props.instance(it, "pot") }
+                potParts += (tripo ?: model(PropMesher.pot().mesh("pot"), mats.pot, "pot")).also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H, 0f)); root.addChild(it) }
+                // the Tripo pot has its own soil; the procedural one gets the domed soil disc
+                if (tripo == null) potParts += model(PropMesher.soil().mesh("soil"), mats.soil, "soil").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H, 0f)); root.addChild(it) }
+                PcLog.i("PROPS stand=${if (props.stand != null) "tripo" else "procedural"} pot=${if (tripo != null) "tripo" else "procedural"}")
+            }
+            jobs += {
                 val disc = PropMesher.shadowDisc().mesh("shadow_disc")
                 potParts += model(disc, mats.shadow, "stand_shadow").also { it.setLocal(position = Vec3(0f, 0.003f, 0f), scale = Vec3(0.33f, 1f, 0.33f)); root.addChild(it) }
                 potParts += model(disc, mats.shadow, "pot_shadow").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H + 0.002f, 0f), scale = Vec3(0.17f, 1f, 0.17f)); root.addChild(it) }
@@ -1018,7 +1032,17 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         return p.position + Quat4.axisAngle(Vec3.UP, p.yaw + spin).rotate(local)
     }
 
+    private var branchesTappable = true
+
     private fun ladderFrame() {
+        // while a branch is selected only its ladder takes taps (Pick: ray and eye-hand pinch both reach the rings)
+        val tappable = Pick.branchesTappable(if (ui.phase == Phase.PRUNING) ui.selected else null)
+        // every frame (views built later, e.g. a rebuilt tree, follow too); setTappable only acts on a change
+        for (v in branchViews.values) v.setTappable(tappable)
+        if (tappable != branchesTappable) {
+            branchesTappable = tappable
+            PcLog.i("PICK branches tappable=$tappable selected=${ui.selected}")
+        }
         val lr = ladderRoot ?: return
         val mats = m ?: return
         val t = tree
@@ -1033,8 +1057,8 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val right = Vec3.UP.cross(toUser).normalized()
         val column = mid + toUser * 0.16f + right * 0.06f
         val dist = column.distanceTo(pose.position)
-        val dia = (dist * 0.0314f).coerceAtLeast(0.03f)
-        val gap = dia * 1.25f
+        val dia = (dist * Pick.RING_DIA_PER_M).coerceAtLeast(0.03f)
+        val gap = dia * Pick.RING_GAP
         // entries: base (0) then buds; at most 16 shown, the rest by "more" rings
         val all = listOf(0) + sel.buds.map { it.index }
         val window = if (all.size <= MAX_RINGS) all else all.drop(ladderWindow).take(MAX_RINGS - 2)
@@ -1483,7 +1507,27 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val hit =
             runCatching {
                 root.scene?.rayCast(o.sdk(), d.sdk(), RAY_MAX, CollisionCastHitMode.ALL, CollisionGroup(CollisionGroup.COLLISION_GROUP_ALL), root)
-            }.getOrNull()?.results?.filter { it.entity.id != beam.id && it.entity.id != dot.id && it.entity.enabled }?.minByOrNull { it.distance }
+            }.getOrNull()?.results?.filter { it.entity.id != beam.id && it.entity.id != dot.id && it.entity.enabled }?.let { hits ->
+                // a bud ring on the line wins over whatever is nearer (q3-1): the ladder is what the user is aiming at
+                hits.filter { h -> ladderRings.any { it.id == h.entity.id } }.minByOrNull { it.distance } ?: hits.minByOrNull { it.distance }
+            }
+        // while a branch is selected the branches take no taps (Pick), so the physics ray goes through them; the beam still
+        // ends on the wood it points at (D41: a visible hit dot in every phase), found on the branches' centre lines
+        val look = if (!branchesTappable && (hit == null || ladderRings.none { it.id == hit.entity.id })) treeRayHit(o, d) else null
+        if (look != null && (hit == null || look.first < hit.distance)) {
+            val len = look.first.coerceIn(0.02f, RAY_MAX)
+            beam.show(true)
+            beam.setLocal(position = o + d * (len / 2f), rotation = Quat4.fromTo(Vec3(0f, 0f, 1f), d), scale = Vec3(RAY_WIDTH, RAY_WIDTH, len))
+            dot.show(true)
+            dot.setLocal(position = o + d * (len - 0.002f), rotation = Quat4.fromTo(Vec3.UP, -d), scale = Vec3(RAY_DOT, 1f, RAY_DOT))
+            val target = "branch:${look.second}(look)"
+            if (target != rayTargetLogged) {
+                rayTargetLogged = target
+                PcLog.i("RAY hit=$target dist=${PcLog.f(len)} phase=${ui.phase}")
+            }
+            rayTriggerWas = s.pressed || s.trigger > 0.6f
+            return
+        }
         // the floor has no collider (D24): the ray meets its plane by arithmetic
         val fy = floorY
         val floorT = if (fy != null && d.y < -0.02f) ((fy - o.y) / d.y).takeIf { it in 0.05f..RAY_MAX } else null
@@ -1511,6 +1555,48 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             tapEntity(hit.entity, null, "ray")
         }
         rayTriggerWas = down
+    }
+
+    /**
+     * Where a ray from [o] along [d] first meets a branch that is shown (cut ones only up to the cut), each branch a chain of
+     * capsules round its centre line (radius as the tap body: wood + 1.5 cm, at least 2.5 cm): (distance, branch id).
+     * Only for the drawn ray while the branch bodies take no taps; never a tap.
+     */
+    private fun treeRayHit(o: Vec3, d: Vec3): Pair<Float, Int>? {
+        var best: Pair<Float, Int>? = null
+        for (v in branchViews.values) {
+            if (v.gone) continue
+            val b = v.branch
+            val end = v.cutS?.takeIf { it.isFinite() } ?: b.length
+            var s0 = 0f
+            while (s0 < end - 0.005f) {
+                val s1 = minOf(end, s0 + 0.06f)
+                val a = treeToWorld(b.pointAt(s0))
+                val c = treeToWorld(b.pointAt(s1))
+                val r = maxOf(b.radiusAt(s0) + 0.015f, 0.025f)
+                // closest points of the ray and the segment a-c
+                val u = c - a
+                val w0 = o - a
+                val aa = u.dot(u)
+                val bb = d.dot(u)
+                val dd = d.dot(w0)
+                val ee = u.dot(w0)
+                val den = aa - bb * bb
+                var sc = if (den > 1e-8f) ((bb * ee - aa * dd) / den) else 0f
+                var tc = if (aa > 1e-8f) ((ee + bb * sc) / aa) else 0f
+                tc = tc.coerceIn(0f, 1f)
+                sc = (u * tc - w0).dot(d)
+                if (sc > 0f && sc < RAY_MAX) {
+                    val gap = ((o + d * sc) - (a + u * tc)).length
+                    if (gap < r) {
+                        val dist = sc - kotlin.math.sqrt(r * r - gap * gap)
+                        if (best == null || dist < best.first) best = dist.coerceAtLeast(0.02f) to b.id
+                    }
+                }
+                s0 = s1
+            }
+        }
+        return best
     }
 
     /** Debug `ray=`: where the right hand usually is, aimed at the chosen target (null when not aiming). */
@@ -1543,6 +1629,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         if (down) debugPressFrames--
         return ControllerSample(PointerRay(origin, dir), trigger = if (down) 1f else 0f, pressed = down, stickX = 0f, stickY = 0f, right = true)
     }
+
+    override fun ringLine(): String =
+        "RINGS sel=${ui.selected} " + ladderRings.indices.filter { ladderRings[it].enabled && ladderBud[it] >= 0 }.joinToString(" ") { "${ladderBud[it]}:${PcLog.pos(ringAt[it] ?: Vec3(0f, 0f, 0f))}" }
 
     override fun aimRay(target: String): String {
         if (target == "tap") {

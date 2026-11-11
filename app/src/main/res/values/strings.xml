@@ -35,8 +35,8 @@
     <string name="hint_real_floor">Moved onto the real floor</string>
     <string name="hint_s06">Stick: left/right turns · fwd/back moves</string>
     <string name="hint_s07">Tap a bud on the ladder · ✕: whole stem</string>
-    <string name="hint_s07_cursor">Stick up/down picks a bud · Trigger previews</string>
-    <string name="hint_s08">Tap again to cut · Tap elsewhere to cancel</string>
+    <string name="hint_s07_cursor">Stick up/down picks a bud · Another branch: B/Y or the window</string>
+    <string name="hint_s08">Tap again to cut · Another bud moves it · B/Y cancels</string>
     <string name="hint_s10">Orange branches need a cut</string>
     <string name="hint_s19">Let go to drop · Snaps to the ring</string>
     <string name="hint_s20">Point at the floor, pull trigger · or pinch</string>
@@ -66,6 +66,7 @@
     <string name="action_hint_off">Hints: off</string>
     <string name="action_hint_on">Hints: on</string>
     <string name="action_turn_left">Turn left 45°</string>
+    <string name="action_pick_another">Another branch</string>
     <string name="action_turn_right">Turn right 45°</string>
     <string name="action_rejoin">Undo cut</string>
     <string name="action_got_it">Got it</string>
@@ -165,7 +166,7 @@
     <string name="vol_high">High</string>
     <string name="set_language">Language</string>
     <string name="set_about">About</string>
-    <string name="about_version">Pruning Class v0.1.4</string>
+    <string name="about_version">Pruning Class v0.1.5</string>
     <string name="on">On</string>
     <string name="off">Off</string>
     <string name="lang_zh">中</string>

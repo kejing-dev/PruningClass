@@ -302,12 +302,30 @@ internal class BranchView(parent: Entity, val branch: Branch) {
     var gone = false
     private var tinted: Material? = null
 
+    private var tappable = false
+
     init {
         parent.addChild(holder)
-        if (branch.selectable) {
-            holder.components.set(branchCollider(branch))
-            holder.components.set(InteractableComponent())
-        }
+        setTappable(true)
+    }
+
+    /**
+     * Off while a branch is selected: the bud ladder alone takes taps then (Pick, q3-1). A removed CollisionComponent
+     * cannot be added again (its PhysicsMaterialResource is closed on removal: crash in the v0.1.5 sweep), so turning
+     * it back on builds a new one.
+     */
+    fun setTappable(on: Boolean) {
+        if (!branch.selectable || on == tappable) return
+        tappable = on
+        runCatching {
+            if (on) {
+                holder.components.set(branchCollider(branch))
+                holder.components.set(InteractableComponent())
+            } else {
+                holder.components.remove(InteractableComponent::class.java)
+                holder.components.remove(CollisionComponent::class.java)
+            }
+        }.onFailure { PcLog.e("PICK branch ${branch.id} tappable=$on failed: $it", it) }
     }
 
     fun setParts(meshes: List<Pair<Wood, MeshResource>>, m: PcMaterials) {

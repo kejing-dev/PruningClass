@@ -147,6 +147,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
                 val k = s.preview
                 if (s.phase == Phase.PRUNING && b != null && k != null) cut(Cut(b, k))
             }
+            PcEvent.PickAnother -> if (s.phase == Phase.PRUNING && s.selected != null) set { it.copy(selected = null, preview = null) }
             PcEvent.TappedElsewhere ->
                 when {
                     s.phase == Phase.PRUNING && s.preview != null -> set { it.copy(preview = null) }

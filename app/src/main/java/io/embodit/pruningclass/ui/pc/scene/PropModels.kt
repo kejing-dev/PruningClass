@@ -1,0 +1,76 @@
+package io.embodit.pruningclass.ui.pc.scene
+
+import com.pico.spatial.core.ecs.Entity
+import com.pico.spatial.core.ecs.ModelComponent
+import com.pico.spatial.core.ecs.ModelFormat
+import com.pico.spatial.core.ecs.OpacityControllerComponent
+import com.pico.spatial.core.ecs.resource.BlendingMode
+import com.pico.spatial.core.ecs.resource.PhysicallyBasedMaterial
+import io.embodit.pruningclass.platform.PcGraph
+import io.embodit.pruningclass.platform.PcLog
+
+/**
+ * The rose's Tripo stand and pot (assets/models/stand.glb, pot.glb; profile B12): decimated and calibrated offline
+ * (tools/tripo-swap/prep_props.py: bottom centre at the origin, y up, the stand 0.40 m tall, the pot 0.30 m tall), loaded once as
+ * disabled templates, cloned per lesson. Every material is forced OPAQUE and opacity components are removed (factory:
+ * a GLB that renders see-through). Missing or broken assets leave [stand] / [pot] null and the scene builds the
+ * procedural ones (PropMesher) instead.
+ */
+internal class PropModels {
+    var stand: Entity? = null
+        private set
+    var pot: Entity? = null
+        private set
+
+    suspend fun load() {
+        stand = loadOne("stand")
+        pot = loadOne("pot")
+    }
+
+    private suspend fun loadOne(role: String): Entity? {
+        val ctx = PcGraph.appContext ?: return null
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        return runCatching {
+                val bytes = ctx.assets.open("models/$role.glb").use { it.readBytes() }
+                val e = Entity.loadSuspend(java.io.ByteArrayInputStream(bytes), ModelFormat.GLTF)
+                e.enabled = false
+                val forced = opaque(e)
+                PcLog.i("MODEL $role loaded ms=${android.os.SystemClock.elapsedRealtime() - t0} bytes=${bytes.size} forcedOpaque=$forced")
+                e
+            }
+            .onFailure { PcLog.i("MODEL $role not used (${it.javaClass.simpleName}: ${it.message}): procedural stand-in") }
+            .getOrNull()
+    }
+
+    private fun opaque(root: Entity): Int {
+        var forced = 0
+        fun walk(e: Entity) {
+            if (e.components[OpacityControllerComponent::class.java] != null) e.components.remove(OpacityControllerComponent::class.java)
+            e.components[ModelComponent::class.java]?.let { mc ->
+                runCatching {
+                    mc.materials.forEach { m ->
+                        if (m is PhysicallyBasedMaterial && m.getBlendingMode() != BlendingMode.OPAQUE) {
+                            m.setBlendingMode(BlendingMode.OPAQUE)
+                            forced++
+                        }
+                    }
+                }
+            }
+            runCatching { e.getChildren() }.getOrNull()?.forEach { walk(it) }
+        }
+        walk(root)
+        return forced
+    }
+
+    /** A new, enabled copy of [template]. */
+    fun instance(template: Entity, name: String): Entity? =
+        runCatching { template.clone(Entity.CloneOptions(true, true))?.also { it.enabled = true; it.named(name) } }
+            .onFailure { PcLog.e("MODEL clone $name failed: $it", it) }
+            .getOrNull()
+
+    fun close() {
+        listOfNotNull(stand, pot).forEach { runCatching { it.destroy(true) } }
+        stand = null
+        pot = null
+    }
+}

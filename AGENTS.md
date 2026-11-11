@@ -5,7 +5,7 @@ floor. Pick a branch, pick the bud on a numbered ladder beside it, tap again to 
 the rules (dead / diseased / damaged first, thin canes, crossing pairs, outward buds, leaders, the 20 % rule) and shows
 the tree next year with your cuts against the model answer. Six lessons: Rose 1 - 3, Apple 1 - 3; lesson 3 of each tree
 is an exam. PICO OS 6, Kotlin, PICO Spatial SDK 6.1.9, one Mixed Stage (Full Space, passthrough) for the tree plus one
-Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.4.
+Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.5.
 
 Design package (binding): `../spatial-app-factory/apps/pruning-class/design-package.json` (states S00 - S21, interactions
 I1 - I25, `rules`, `panels`, `entities3d`, `copy`). Tree look ported from the design's sample `trees.js`. Skeleton copied
@@ -21,7 +21,9 @@ its own controller ray, every window open waits for a level head (LevelGate), th
 v0.1.1. v0.1.3 (2026-11-04, profile D41) keeps the window, its TabBar and every plate >= 10 degrees off the tree
 (`Clearance`, ClearanceTest) and draws the ray in every phase. v0.1.4 (2026-11-10, QA #2): every window page fills the
 window (FillCard), the volume is a snapping slider with louder sounds, and the rose's stand and pot are modelled
-(PropMesher; a stand-in until Tripo works on this PC). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
+(Tripo models assets/models/stand.glb + pot.glb via PropModels, decimated by tools/tripo-swap/prep_props.py;
+PropMesher's procedural stand / pot / soil is the fallback if a model fails to load). v0.1.5 (QA #3, D17): while a branch is selected no branch takes
+taps, only its bud ladder (`Pick`); [换一根枝] in the window / B / Y leaves the selection. Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
 
 ## Structure
 
@@ -42,7 +44,8 @@ app/src/main/java/io/embodit/pruningclass/
   domain/usecase/Placement     placeUpright (yaw only), treeAhead / treeBesideWindow (Clearance.treeRightDeg right),
                                dockExplain (beside the crown), chipBesideTree; Clearance (D41: window footprint, tree
                                reach incl. next year);
-                               PlaceMachine (LOCKED / PLACING); LevelGate (window opens only with the head level)
+                               PlaceMachine (LOCKED / PLACING); LevelGate (window opens only with the head level); Pick (what
+                               takes taps while a branch is selected)
   data/Store                   SharedPreferences "pruning_class": settings, records, graduations, cuts per lesson
   ui/theme                     PcColors (the only colour literals), PcTheme (PicoTheme), Noto fonts
   ui/pc                        PcViewModel (state machine + DebugJump), PcUiState / PcEvent / PcPages, PcShared (the one
@@ -136,6 +139,7 @@ synthesise a floor put a virtual one at 0.05.**
 | `nofloor=1\|0`, `floor=arrive`, `blocked=1\|0`, `budzoom=1\|0`, `seated=1\|0`, `lang=zh\|en`, `mute=1\|0`, `testtex=1\|0` | sensing and settings ("F↑" on every textured plate) |
 | `settings`, `recall`, `replant`, `quit`, `again`, `next`, `close`, `card`, `release`, `clear`, `ui <control>` | panel actions; `recall` opens settings first (the button lives there); `card` works from the picker / settings. `ui` names: every worded button by its first argument (`done`, `undo`, `hint`, `set_quit`, `confirm_yes`, `replant_cancel`, ...), `sound`, `card_R1..card_A3`, `row_<id>` |
 | `window=close\|open`, `tab=lesson\|card\|settings`, `icons` | the window's × / the "open panel" chip; a TabBar press; every `ic_*` drawn by Android into `files/icons.png` (`adb exec-out run-as io.embodit.pruningclass cat files/icons.png > icons.png`) |
+| `rings` | `RINGS sel=<id> <bud>:(x, y, z) ...` for the shown ladder (tools/ring_sweep.sh projects them for eye-hand pinches) |
 | `dump`, `hmd`, `panels`, `tree` | queries (`PC-TREE` lines for every selectable branch) |
 
 Log tag `PruningClass`: `PC-STATE <qaName> cuts= sel= prev= removed=` on every state change (qaName =
@@ -159,7 +163,8 @@ and chip are rebuilt 1.5 / 4 / 8 / 12 / 20 s after a change (the idle emulator c
 D41 evidence: `tools/shots_d41.sh <zh|en> <lesson> <dir>` (every phase: front / side 35 deg / ray at the tree, with
 `tools/cam_to.sh <yaw right> <pitch up>`, a closed loop on the `hmd` line: cam.sh's 0.0383 deg/px is 0.0537 here).
 Page blank (D44): `python tools/blank_meter.py <shots_panel frames>` (outer <= 25 %, inner band <= 20 %; edges only,
-a little stricter than by eye). Stress: `tools/cold_start.sh 3`, `tools/stress_panels.sh 30` (in a lesson). Scripts default to emulator-5560. Stopping a
+a little stricter than by eye). Rings (q3-1): `tools/ring_sweep.sh <lesson> "<branch ids>" <dir>` (ray on every ring + a real eye-hand pinch on
+every ring; selection must not change). Stress: `tools/cold_start.sh 3`, `tools/stress_panels.sh 30` (in a lesson). Scripts default to emulator-5560. Stopping a
 background script from the agent's task tool can leave its bash child running: check for stray `shots*.sh` processes
 before the next run.
 
