@@ -67,7 +67,7 @@ class Sfx {
         if (!muted && track != null) queue += kind
     }
 
-    private class Voice(val s: FloatArray, var at: Int)
+    private class Voice(val kind: Kind, val s: FloatArray, var at: Int)
 
     private fun loop(t: AudioTrack) {
         val buf = ShortArray(BLOCK)
@@ -76,7 +76,9 @@ class Sfx {
         while (running) {
             while (true) {
                 val k = queue.poll() ?: break
-                voices += Voice(sounds.of(k), 0)
+                // the same sound again restarts it instead of stacking a second copy (factory D51)
+                voices.removeAll { it.kind == k }
+                voices += Voice(k, sounds.of(k), 0)
             }
             java.util.Arrays.fill(mix, 0f)
             val g = gain
@@ -88,7 +90,7 @@ class Sfx {
                 v.at += n
                 if (v.at >= v.s.size) it.remove()
             }
-            for (i in 0 until BLOCK) buf[i] = (mix[i].coerceIn(-1f, 1f) * 32000f).toInt().toShort()
+            for (i in 0 until BLOCK) buf[i] = (limit(mix[i]) * 32767f).toInt().toShort()
             if (runCatching { t.write(buf, 0, BLOCK) }.getOrDefault(-1) < 0) {
                 try {
                     Thread.sleep(10)
@@ -99,29 +101,29 @@ class Sfx {
         }
     }
 
-    /** The sounds, peak-normalised (snip / snap / right to -3 dBFS before the volume step, wrong to -4.5 dBFS). */
+    /** The sounds, peak-normalised (snip / snap / right to -1.2 dBFS before the volume step, wrong to -2 dBFS). */
     class Sounds(private val rate: Int) {
         val snip = snip()
-        val right = tones(floatArrayOf(880f, 1320f), 0.22f, 0.708f)
-        val wrong = tones(floatArrayOf(196f, 185f), 0.32f, 0.6f)
+        val right = tones(floatArrayOf(880f, 1320f), 0.22f, PEAK)
+        val wrong = tones(floatArrayOf(196f, 185f), 0.32f, 0.794f)
         val snap = click()
 
         fun of(k: Kind) = when (k) { Kind.SNIP -> snip; Kind.RIGHT -> right; Kind.WRONG -> wrong; Kind.SNAP -> snap }
 
         private fun snip(): FloatArray {
-            // two short metallic noise bursts (blade closing) 25 ms apart
-            val n = (0.09f * rate).toInt()
+            // two metallic noise bursts (blade closing) 25 ms apart, held long enough to be heard at 1 - 3 m
+            val n = (0.13f * rate).toInt()
             val out = FloatArray(n)
             var seed = 0x1234567
             for (i in 0 until n) {
                 seed = seed * 1103515245 + 12345
                 val white = ((seed ushr 16) and 0x7FFF) / 16384f - 1f
                 val t = i.toFloat() / rate
-                val e1 = exp(-t / 0.006f)
-                val e2 = if (t > 0.025f) exp(-(t - 0.025f) / 0.01f) else 0f
+                val e1 = exp(-t / 0.014f)
+                val e2 = if (t > 0.025f) exp(-(t - 0.025f) / 0.03f) else 0f
                 out[i] = white * (e1 + 0.8f * e2) * 0.6f + sin(2 * PI * 3400.0 * t).toFloat() * (e1 + e2) * 0.4f
             }
-            return norm(out, 0.708f)
+            return norm(out, PEAK)
         }
 
         private fun tones(f: FloatArray, dur: Float, peak: Float): FloatArray {
@@ -138,7 +140,7 @@ class Sfx {
 
         private fun click(): FloatArray {
             val n = (0.06f * rate).toInt()
-            return norm(FloatArray(n) { i -> val t = i.toFloat() / rate; sin(2 * PI * 1000.0 * t).toFloat() * exp(-t / 0.012f) }, 0.708f)
+            return norm(FloatArray(n) { i -> val t = i.toFloat() / rate; sin(2 * PI * 1000.0 * t).toFloat() * exp(-t / 0.02f) }, PEAK)
         }
 
         private fun norm(a: FloatArray, peak: Float): FloatArray {
@@ -153,6 +155,23 @@ class Sfx {
 
     companion object {
         const val RATE = 48_000
+
+        /** -1.2 dBFS: at the HIGH detent (gain 1) every sound peaks just under -1 dBFS. */
+        const val PEAK = 0.871f
+
+        /** The mix never goes past -1 dBFS, however many sounds overlap (factory D51: one bus, limited). */
+        const val LIMIT = 0.89f
+        private const val KNEE = 0.708f
+
+        /** Soft knee above -3 dBFS, never past [LIMIT] (a hard clip would crackle when sounds overlap). */
+        fun limit(x: Float): Float {
+            val a = kotlin.math.abs(x)
+            if (a <= KNEE) return x
+            val over = (a - KNEE) / (LIMIT - KNEE)
+            val y = KNEE + (LIMIT - KNEE) * kotlin.math.tanh(over)
+            return if (x < 0f) -y else y
+        }
+
         private const val BLOCK = 480
     }
 }

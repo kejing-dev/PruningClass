@@ -5,8 +5,11 @@ enum class BlockReason { NOT_IN_FULL_SPACE, WITHOUT_PERMISSION, DEVICE_NOT_SUPPO
 
 enum class LanguagePref { SYSTEM, ZH, EN }
 
-/** Sound volume (design `panels.settings` row 8). */
-enum class Volume(val gain: Float) { LOW(0.35f), MID(0.6f), HIGH(0.9f) }
+/**
+ * Sound volume (design `panels.settings` row 8): the three detents of the settings slider. MID (the default) puts the
+ * sounds' active segment at >= -20 dBFS RMS, HIGH keeps every peak <= -1 dBFS (SfxLevelTest, factory loudness rule).
+ */
+enum class Volume(val gain: Float) { LOW(0.45f), MID(0.75f), HIGH(1.0f) }
 
 /** Everything the user can set (design `persistence.what`). */
 data class Settings(

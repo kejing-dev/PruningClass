@@ -62,9 +62,11 @@ internal class PcMaterials(private val shared: SharedResources) {
     // buds are tiny: unlit keeps their exact colour (lit, the key light washed them to pale pink)
     val budRose: Material = unlit(PcColors.BudRose)
     val budApple: Material = unlit(PcColors.BudApple)
-    val pot: Material = lit(PcColors.Pot, 0.92f)
-    val stand: Material = lit(PcColors.Stand, 0.85f)
-    val soil: Material = lit(PcColors.Soil, 1f)
+    // the rose's stand and pot (PropMesher): textured PBR, so the room light shades them (profile B24)
+    val pot: Material = texturedLit(PropMesher.clay(), 0.9f, PcColors.Pot, "clay")
+    val stand: Material = texturedLit(PropMesher.oak(), 0.7f, PcColors.Stand, "oak")
+    val soil: Material = texturedLit(PropMesher.soilTexture(), 1f, PcColors.Soil, "soil")
+    val shadow: Material = textured(PropMesher.shadow(), "shadow") ?: sheer(PcColors.Ink, 0.3f)
     val leaf: Material = lit(PcColors.Leaf, 0.6f, twoSided = true)
     val bloomRose: Material = unlit(PcColors.BloomRose, twoSided = true)
     val bloomApple: Material = unlit(PcColors.BloomApple, twoSided = true)
@@ -126,6 +128,24 @@ internal class PcMaterials(private val shared: SharedResources) {
             }
             .onFailure { PcLog.w("TEXTURE bark failed: $it") }
             .getOrElse { lit(color, 0.85f) }
+
+    /** Double-sided: the lathe / leg quads are seen from both sides (a culled outer wall showed the shadow through, v0.1.4 test). */
+    private fun texturedLit(bitmap: Bitmap, roughness: Float, fallback: Color, name: String): Material =
+        runCatching {
+                val tex = shared.keep(TextureResource.create(bitmap))
+                shared.keep(
+                    PhysicallyBasedMaterial.create(BlendingMode.OPAQUE).apply {
+                        setBaseColor(Color4(1f, 1f, 1f, 1f))
+                        setBaseColorTexture(tex)
+                        setMetallic(0f)
+                        setRoughness(roughness)
+                        setEmissiveColor(Color4(fallback.red * 0.04f, fallback.green * 0.04f, fallback.blue * 0.04f, 1f))
+                        setCullingMode(MaterialCullingMode.NONE)
+                    }
+                ) as Material
+            }
+            .onFailure { PcLog.w("TEXTURE $name failed: $it") }
+            .getOrElse { lit(fallback, roughness, twoSided = true) }
 
     private fun lit(color: Color, roughness: Float, twoSided: Boolean = false): PhysicallyBasedMaterial =
         shared.keep(

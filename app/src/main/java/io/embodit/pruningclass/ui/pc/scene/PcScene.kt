@@ -496,12 +496,15 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         treeReach = reaches.getOrPut(lesson) { maxOf(Clearance.reach(t), 0.30f) }
         PcLog.i("TREE build lesson=$lesson branches=${t.branches.size} selectable=${t.selectable.size}")
         if (t.species == Species.ROSE) {
-            // stand 0.40 m (top 0.40 x 0.03 x 0.40, four legs) and the pot 0.35 x 0.30 m with soil, as in the mock-up
+            // the 0.40 m oak stand and the terracotta pot with soil (PropMesher, QA round 2 q2-3: no stacked boxes), each with a
+            // soft contact shadow; one mesh per job (dynamic mesh pacing)
+            jobs += { potParts += model(PropMesher.stand().mesh("stand"), mats.stand, "stand").also { root.addChild(it) } }
+            jobs += { potParts += model(PropMesher.pot().mesh("pot"), mats.pot, "pot").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H, 0f)); root.addChild(it) } }
             jobs += {
-                potParts += model(meshes.cube, mats.stand, "stand_top").also { it.setLocal(position = Vec3(0f, 0.385f, 0f), scale = Vec3(0.40f, 0.03f, 0.40f)); root.addChild(it) }
-                for ((x, z) in listOf(-1f to -1f, 1f to -1f, -1f to 1f, 1f to 1f)) potParts += model(meshes.cube, mats.stand, "stand_leg").also { it.setLocal(position = Vec3(x * 0.17f, 0.185f, z * 0.17f), scale = Vec3(0.03f, 0.37f, 0.03f)); root.addChild(it) }
-                potParts += model(meshes.cylinder, mats.pot, "pot").also { it.setLocal(position = Vec3(0f, 0.40f, 0f), scale = Vec3(0.165f, 0.30f, 0.165f)); root.addChild(it) }
-                potParts += model(meshes.disc, mats.soil, "soil").also { it.setLocal(position = Vec3(0f, 0.702f, 0f), scale = Vec3(0.16f, 1f, 0.16f)); root.addChild(it) }
+                potParts += model(PropMesher.soil().mesh("soil"), mats.soil, "soil").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H, 0f)); root.addChild(it) }
+                val disc = PropMesher.shadowDisc().mesh("shadow_disc")
+                potParts += model(disc, mats.shadow, "stand_shadow").also { it.setLocal(position = Vec3(0f, 0.003f, 0f), scale = Vec3(0.33f, 1f, 0.33f)); root.addChild(it) }
+                potParts += model(disc, mats.shadow, "pot_shadow").also { it.setLocal(position = Vec3(0f, PropMesher.STAND_H + 0.002f, 0f), scale = Vec3(0.17f, 1f, 0.17f)); root.addChild(it) }
             }
         }
         // one entity per selectable / major branch; non-selectable ones are drawn with their parent

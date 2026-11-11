@@ -12,7 +12,10 @@ shot() { local name="$1"; shift; for c in "$@"; do "$J" cmd "$c"; done; w 4; w 4
 "$J" cmd 'state=S02'; w 2; "$J" cmd 'lesson=R1'; w 4; w 4; w 4; w 4
 for lang in zh en; do
   "$J" cmd "lang=$lang"
+  shot win-$lang-S01-welcome 'release' 'state=S01'
   shot win-$lang-S02-picker 'state=S02'
+  shot win-$lang-S03-finding 'release' 'nofloor=1' 'state=S03:R1'
+  "$J" cmd 'nofloor=0'; "$J" cmd release
   shot win-$lang-S05-rules 'state=S05:A2'
   shot win-$lang-S06-control 'state=S06:R1'
   shot win-$lang-S07-control 'state=S07:R1'

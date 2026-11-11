@@ -5,7 +5,7 @@ floor. Pick a branch, pick the bud on a numbered ladder beside it, tap again to 
 the rules (dead / diseased / damaged first, thin canes, crossing pairs, outward buds, leaders, the 20 % rule) and shows
 the tree next year with your cuts against the model answer. Six lessons: Rose 1 - 3, Apple 1 - 3; lesson 3 of each tree
 is an exam. PICO OS 6, Kotlin, PICO Spatial SDK 6.1.9, one Mixed Stage (Full Space, passthrough) for the tree plus one
-Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.3.
+Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.4.
 
 Design package (binding): `../spatial-app-factory/apps/pruning-class/design-package.json` (states S00 - S21, interactions
 I1 - I25, `rules`, `panels`, `entities3d`, `copy`). Tree look ported from the design's sample `trees.js`. Skeleton copied
@@ -19,7 +19,9 @@ were replaced by one system window whose own controls (the dot under it: × / mo
 v0.1.2 (2026-11-03) answers the first device feedback ("no controller ray", "use the native tab bar"): the app draws
 its own controller ray, every window open waits for a level head (LevelGate), the tab bar was already native since
 v0.1.1. v0.1.3 (2026-11-04, profile D41) keeps the window, its TabBar and every plate >= 10 degrees off the tree
-(`Clearance`, ClearanceTest) and draws the ray in every phase. Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
+(`Clearance`, ClearanceTest) and draws the ray in every phase. v0.1.4 (2026-11-10, QA #2): every window page fills the
+window (FillCard), the volume is a snapping slider with louder sounds, and the rose's stand and pot are modelled
+(PropMesher; a stand-in until Tripo works on this PC). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
 
 ## Structure
 
@@ -30,7 +32,8 @@ app/src/main/java/io/embodit/pruningclass/
     tracking/                  HMD pose, block reason (an all-zero pose is invalid)
     input/ControllerInput      stick X / Y (axis lock), trigger, controller ray
     sense/PlaneTracker         FLOOR planes, only while a tree is being placed               [Figure Model]
-    audio/Sfx                  snip / right / wrong / snap, synthesised once, one streaming AudioTrack
+    audio/Sfx                  snip / right / wrong / snap, synthesised once, one streaming AudioTrack, one voice per
+                               sound, soft limiter at -1 dBFS; Volume detents 0.45 / 0.75 / 1.0
   domain/model                 Vec3 / Quat4, PcModel (settings, records, enums), Surface
   domain/tree/                 Tree (Branch / Bud / Piece / Cut, labels MUST / OK / KEEP / MAJOR, oneOf groups,
                                acceptable bud ranges), Lessons (R1..A3: species, seeds, must counts, rules),
@@ -50,11 +53,13 @@ app/src/main/java/io/embodit/pruningclass/
                                BlockedDialog, Common (WindowPage, Glass, buttons, overflow log), PcStrings
   ui/pc/scene                  PcScene (the one ECS System: floor, placement, tree, cuts, ladder, preview, falling
                                pieces, next year, relocate, the chip / level hint, the tree drag, the controller ray), PcViews (materials, meshes, colliders),
-                               TreeMesher (tube sweep, bud cones, caps, leaves / flowers), PanelRig, PanelSpec, SceneKit
+                               TreeMesher (tube sweep, bud cones, caps, leaves / flowers), PropMesher (oak stand, terracotta pot,
+                               soil, their textures and contact shadows), PanelRig, PanelSpec, SceneKit
   ui/pc/debug/PcProbe          the debug build's view into the running scene
 app/src/debug/                 DebugCommandReceiver + DebugCommands (QA hooks)
 app/src/test/                  TreeTest (lessons, judge, next year, answer sets), PlacementTest (upright under pitch / roll,
-                               four sides, PlaceMachine, explain card), ClearanceTest (window / card / chip vs every point of every tree, this year and next), LevelGateTest, SfxLevelTest (peaks <= -1 dBFS)
+                               four sides, PlaceMachine, explain card), ClearanceTest (window / card / chip vs every point of every tree, this year and next), LevelGateTest, SfxLevelTest (peaks <= -1 dBFS at every detent, default active segment >= -20 dBFS RMS,
+                               overlaps limited; renders build/sounds/loudness.wav)
 tools/                         pc.sh (cmd / shot / log / state / launch / stop / install), shots.sh (every state),
                                shots_panel.sh (one close-up per panel, zh + en), cam.sh (turn / pitch the emulator
                                camera by degrees), contrast.py (measured WCAG ratio on a screenshot), cold_start.sh,
@@ -153,7 +158,8 @@ and chip are rebuilt 1.5 / 4 / 8 / 12 / 20 s after a change (the idle emulator c
 15-25 s. `tools/cam.sh left|up <deg>` turns the camera (needs `harness/uia_cam.ps1 set camera_rotation_button on`).
 D41 evidence: `tools/shots_d41.sh <zh|en> <lesson> <dir>` (every phase: front / side 35 deg / ray at the tree, with
 `tools/cam_to.sh <yaw right> <pitch up>`, a closed loop on the `hmd` line: cam.sh's 0.0383 deg/px is 0.0537 here).
-Stress: `tools/cold_start.sh 3`, `tools/stress_panels.sh 30` (in a lesson). Scripts default to emulator-5560. Stopping a
+Page blank (D44): `python tools/blank_meter.py <shots_panel frames>` (outer <= 25 %, inner band <= 20 %; edges only,
+a little stricter than by eye). Stress: `tools/cold_start.sh 3`, `tools/stress_panels.sh 30` (in a lesson). Scripts default to emulator-5560. Stopping a
 background script from the agent's task tool can leave its bash child running: check for stray `shots*.sh` processes
 before the next run.
 

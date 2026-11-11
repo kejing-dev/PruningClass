@@ -4,6 +4,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +29,7 @@ import com.pico.spatial.ui.design.CircularProgressDefaults
 import com.pico.spatial.ui.design.CircularProgressIndicator
 import com.pico.spatial.ui.design.Icon
 import com.pico.spatial.ui.design.PicoTheme
+import com.pico.spatial.ui.design.Slider
 import com.pico.spatial.ui.design.Switch
 import com.pico.spatial.ui.design.Text
 import io.embodit.pruningclass.R
@@ -117,11 +120,12 @@ internal fun ControlPanel(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
         }
         ViewSegments(state, onEvent, enabled = false)
         HintRow(state)
-        // the window is sized for the tallest page: the rest of the lesson tab shows this lesson's rules
-        if (state.phase.inLesson) {
-            Spacer(Modifier.height(16.dp))
-            Label(rs(R.string.rules_this_lesson), secondary = true)
-            LessonRules(state)
+        // the window is sized for the tallest page: the rest of the lesson tab is this lesson's rules
+        if (state.phase != Phase.STARTING) {
+            FillCard(Modifier.weight(1f)) {
+                Label(rs(R.string.rules_this_lesson), secondary = true)
+                LessonRules(state)
+            }
         }
     }
 }
@@ -129,12 +133,33 @@ internal fun ControlPanel(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
 /** The rules of this lesson (all five in an exam), with their numbers (rules page, control page). */
 @Composable
 private fun LessonRules(state: PcUiState) {
-    for (r in state.lesson.rules.take(if (state.exam) 5 else 3)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(text = r, color = PicoTheme.colorScheme.labelPrimary, style = PcType.chip)
-            Label(rsn("rule_" + r.replace("-", "")), Modifier.weight(1f), maxLines = 3)
+    for (r in state.lesson.rules.take(if (state.exam) 5 else 3)) RuleRow(r)
+}
+
+@Composable
+private fun RuleRow(r: String, source: Boolean = false) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = r, color = PicoTheme.colorScheme.labelPrimary, style = PcType.title)
+        Column(Modifier.weight(1f)) {
+            val text = rsn("rule_" + r.replace("-", ""))
+            Text(text = text, color = PicoTheme.colorScheme.labelPrimary, style = PcType.title, maxLines = 4, overflow = TextOverflow.Ellipsis, onTextLayout = overflowLog(text))
+            if (source) Text(text = rs(R.string.rule_source), color = PicoTheme.colorScheme.labelSecondary, style = PcType.chip)
         }
     }
+}
+
+/**
+ * The block that fills the rest of a page (factory D44 "空白 ≤ 窗高 25%, 内部空带 ≤ 20%"): the window has one size for every
+ * page (a system window cannot be resized at run time, pico-cli-feedback), so the page's main content stretches into a
+ * tinted card and spreads evenly inside it instead of leaving the bottom of the window empty.
+ */
+@Composable
+private fun FillCard(modifier: Modifier, arrangement: Arrangement.Vertical = Arrangement.SpaceEvenly, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(PicoTheme.colorScheme.fillTertiary).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = arrangement,
+        content = content,
+    )
 }
 
 @Composable
@@ -186,15 +211,16 @@ internal fun WelcomePage(filled: Boolean, onEvent: (PcEvent) -> Unit) {
         if (!filled) return@WindowPage
         Title(rs(R.string.title_app))
         Label(rs(R.string.welcome_line), maxLines = 2)
-        for ((icon, text) in listOf(R.drawable.ic_rotate_right to R.string.welcome_1, R.drawable.ic_content_cut to R.string.welcome_2, R.drawable.ic_eco to R.string.welcome_3)) {
-            Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Icon(painter = painterResource(icon), contentDescription = null, modifier = Modifier.size(24.dp), tint = PicoTheme.colorScheme.labelPrimary)
-                Label(rs(text), maxLines = 2)
+        FillCard(Modifier.weight(1f)) {
+            for ((icon, text) in listOf(R.drawable.ic_rotate_right to R.string.welcome_1, R.drawable.ic_content_cut to R.string.welcome_2, R.drawable.ic_eco to R.string.welcome_3)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Icon(painter = painterResource(icon), contentDescription = null, modifier = Modifier.size(56.dp), tint = PicoTheme.colorScheme.labelPrimary)
+                    val t = rs(text)
+                    Text(text = t, color = PicoTheme.colorScheme.labelPrimary, style = PcType.title, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), onTextLayout = overflowLog(t))
+                }
             }
         }
-        Spacer(Modifier.weight(1f))
         MainButton("welcome_go", rs(R.string.action_pick), R.drawable.ic_arrow_forward, true, Modifier.fillMaxWidth()) { onEvent(PcEvent.WelcomeGo) }
-        Spacer(Modifier.height(8.dp))
     }
 }
 
@@ -206,14 +232,14 @@ internal fun PickerPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) ->
             Title(rs(R.string.picker_title), Modifier.weight(1f))
             SoundAndSettings(state, onEvent)
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Gap)) {
+        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Gap)) {
             for (sp in Species.entries) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Gap)) {
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Gap)) {
                     Row(Modifier.height(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(text = rsn("species_${sp.name.lowercase()}"), color = PicoTheme.colorScheme.labelPrimary, style = PcType.chip)
                         if (sp in state.graduated) Icon(painter = painterResource(R.drawable.ic_workspace_premium), contentDescription = null, modifier = Modifier.size(20.dp), tint = PicoTheme.colorScheme.labelPrimary)
                     }
-                    for (l in LessonId.of(sp)) LessonCard(state, l, onEvent)
+                    for (l in LessonId.of(sp)) Box(Modifier.fillMaxWidth().weight(1f)) { LessonCard(state, l, onEvent) }
                 }
             }
         }
@@ -227,7 +253,7 @@ private fun LessonCard(state: PcUiState, l: LessonId, onEvent: (PcEvent) -> Unit
     val onClick = { onEvent(PcEvent.LessonPicked(l)) }
     Button(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(112.dp).probe("card_$l", onClick),
+        modifier = Modifier.fillMaxSize().probe("card_$l", onClick),
         size = ButtonDefaults.Regular.copy(height = 112.dp, minWidth = 200.dp),
         shape = RoundedCornerShape(20.dp),
         colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.fillTertiary, contentColor = PicoTheme.colorScheme.labelPrimary),
@@ -240,6 +266,9 @@ private fun LessonCard(state: PcUiState, l: LessonId, onEvent: (PcEvent) -> Unit
             }
             val name = rsn("card_$l")
             Text(text = name, color = PicoTheme.colorScheme.labelPrimary, style = PcType.title, maxLines = 2, overflow = TextOverflow.Ellipsis, onTextLayout = overflowLog(name))
+            // the rules this lesson teaches, by number (the card is a third of the page tall)
+            val rules = l.rules.take(if (l.exam) 5 else 3).joinToString("  ")
+            Text(text = rules, color = PicoTheme.colorScheme.labelSecondary, style = PcType.chip, maxLines = 2, overflow = TextOverflow.Ellipsis, onTextLayout = overflowLog(rules))
             Spacer(Modifier.weight(1f))
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (rec?.passed == true) Icon(painter = painterResource(R.drawable.ic_check), contentDescription = null, modifier = Modifier.size(18.dp), tint = PicoTheme.colorScheme.labelPrimary)
@@ -255,11 +284,10 @@ internal fun RulesPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) -> 
     WindowPage(spacing = Gap) {
         if (!filled) return@WindowPage
         Title(lessonName(state.lesson))
-        LessonRules(state)
-        Spacer(Modifier.weight(1f))
+        // each rule with its source line: the card is most of the window tall (D44 inner band <= 20 %)
+        FillCard(Modifier.weight(1f)) { for (r in state.lesson.rules.take(if (state.exam) 5 else 3)) RuleRow(r, source = true) }
         Label(if (state.exam) rs(R.string.exam_note) else rs(R.string.rules_count, state.lesson.mustCuts), secondary = true)
         MainButton("start", rs(R.string.action_start), R.drawable.ic_content_cut, state.phase == Phase.RULES, Modifier.fillMaxWidth()) { onEvent(PcEvent.StartPruning) }
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -281,19 +309,9 @@ internal fun CardPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) -> U
             // gate:allow tabs-segment in-page option (rose / apple card on the rule-card page), not a page switch: pages switch only by the native TabBar
             Segments(listOf("card_rose" to rsn("species_rose"), "card_apple" to rsn("species_apple")), sp.ordinal, { onEvent(PcEvent.CardSpecies(Species.entries[it])) }, width = 260.dp, height = 48.dp)
         }
-        for (r in Rules.of(sp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(text = r, color = PicoTheme.colorScheme.labelPrimary, style = PcType.chip)
-                Column(Modifier.weight(1f)) {
-                    Label(rsn("rule_" + r.replace("-", "")), maxLines = 3)
-                    Text(text = rs(R.string.rule_source), color = PicoTheme.colorScheme.labelSecondary, style = PcType.chip)
-                }
-            }
-        }
-        Spacer(Modifier.weight(1f))
+        FillCard(Modifier.weight(1f)) { for (r in Rules.of(sp)) RuleRow(r, source = true) }
         // graduation: [Close] goes on to the result; the rule card itself is a TabBar page (left by another tab)
         if (grad) WordButton("card_close", rs(R.string.action_close), { onEvent(PcEvent.Close) }, minWidth = 140.dp, iconRes = R.drawable.ic_close)
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -334,7 +352,7 @@ internal fun ResultPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) ->
             Title(verdict)
         }
         ViewSegments(state, onEvent, enabled = true)
-        Column(Modifier.height(300.dp)) {
+        Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = if (state.view == View.NOW) Arrangement.Center else Arrangement.SpaceEvenly) {
             if (state.view == View.NOW) ReviewRows(state, onEvent) else NextYearRows(state)
         }
         Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
@@ -356,7 +374,14 @@ private fun ReviewRows(state: PcUiState, onEvent: (PcEvent) -> Unit) {
         rows += Triple(id, if (r.credit == 0f) rs(R.string.row_missed, rsn("defect_${t[id]?.defect}")) else rs(R.string.row_half, rsn("defect_${t[id]?.defect}")), false)
     }
     if (rows.isEmpty()) {
-        Label(rs(R.string.row_none), Modifier.height(44.dp))
+        // nothing to review: the tick, and the rules this lesson practised (the block is a third of the window tall)
+        FillCard(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(painter = painterResource(R.drawable.ic_check), contentDescription = null, modifier = Modifier.size(48.dp), tint = PicoTheme.colorScheme.labelPrimary)
+                Title(rs(R.string.row_none))
+            }
+            LessonRules(state)
+        }
         return
     }
     for ((id, text, wrong) in rows.take(5)) {
@@ -403,6 +428,30 @@ private fun NextYearRows(state: PcUiState) {
 // settings (design `panels.settings`): the last TabBar page, 12 rows + inline confirm, [Quit app] last (D26)
 // =============================================================================================
 
+/**
+ * Volume (factory loudness rule 2026-11-05): a slider with three detents (low / mid / high, it snaps to the nearest) and
+ * the percent; [声音] above is the mute. 48 dp tall (SpatialUI's default 32 dp misses gaze pinches), >= 100 dp wide.
+ */
+@Composable
+private fun VolumeSlider(v: Volume, sound: Boolean, onEvent: (PcEvent) -> Unit) {
+    Row(Modifier.width(220.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Slider(
+            modifier = Modifier.width(132.dp).height(48.dp).probe("vol_slider"),
+            value = v.ordinal / 2f,
+            onValueChange = { x ->
+                val snapped = Volume.entries[(x * 2f).roundToInt().coerceIn(0, 2)]
+                if (snapped != v) onEvent(PcEvent.VolumeSet(snapped))
+            },
+            valueRange = 0f..1f,
+            enabled = sound,
+        )
+        for (d in Volume.entries) Box(Modifier.size(0.dp).probe("vol_${d.name.lowercase()}") { onEvent(PcEvent.VolumeSet(d)) })
+        val word = rs(when (v) { Volume.LOW -> R.string.vol_low; Volume.MID -> R.string.vol_mid; Volume.HIGH -> R.string.vol_high })
+        val text = if (sound) "$word ${(v.gain * 100).roundToInt()}%" else rs(R.string.off)
+        Text(text = text, color = if (sound) PicoTheme.colorScheme.labelPrimary else PicoTheme.colorScheme.labelSecondary, style = PcType.figure, maxLines = 1, onTextLayout = overflowLog(text))
+    }
+}
+
 @Composable
 internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) -> Unit) {
     WindowPage(padding = 12.dp, spacing = 0.dp) {
@@ -435,8 +484,7 @@ internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
         row(R.drawable.ic_park, rs(R.string.action_replant)) { WordButton("set_replant", rs(R.string.action_replant), { onEvent(PcEvent.Replant) }, enabled = inLesson, minWidth = 220.dp, height = 48.dp) }
         // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_volume_up, rs(R.string.set_sound)) { Segments(listOf("sound_on" to rs(R.string.on), "sound_off" to rs(R.string.off)), if (s.sound) 0 else 1, { onEvent(PcEvent.Sound(it == 0)) }, width = 220.dp) }
-        // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
-        row(R.drawable.ic_volume_up, rs(R.string.set_volume)) { Segments(listOf("vol_low" to rs(R.string.vol_low), "vol_mid" to rs(R.string.vol_mid), "vol_high" to rs(R.string.vol_high)), s.volume.ordinal, { onEvent(PcEvent.VolumeSet(Volume.entries[it])) }, width = 220.dp) }
+        row(R.drawable.ic_volume_up, rs(R.string.set_volume)) { VolumeSlider(s.volume, s.sound, onEvent) }
         val langSel = when (s.language) { LanguagePref.ZH -> 0; LanguagePref.EN -> 1; LanguagePref.SYSTEM -> if (zh) 0 else 1 }
         // gate:allow tabs-segment in-page option (one setting row's options), not a page switch: pages switch only by the native TabBar
         row(R.drawable.ic_language, rs(R.string.set_language)) { Segments(listOf("lang_zh" to rs(R.string.lang_zh), "lang_en" to rs(R.string.lang_en)), langSel, { onEvent(PcEvent.Language(if (it == 0) LanguagePref.ZH else LanguagePref.EN)) }, width = 220.dp) }

@@ -108,10 +108,10 @@ S = [
     ("card_title", "Rule card", "口诀卡"),
     ("set_bud_zoom", "Bud zoom", "芽眼放大"), ("set_floor", "Floor height", "地面高度"), ("set_seated", "I am", "我是"), ("set_stand", "Standing", "站着"), ("set_sit", "Seated", "坐着"),
     ("set_sound", "Sound", "声音"), ("set_volume", "Volume", "音量"), ("vol_low", "Low", "低"), ("vol_mid", "Mid", "中"), ("vol_high", "High", "高"),
-    ("set_language", "Language", "语言"), ("set_about", "About", "关于"), ("about_version", "Pruning Class v0.1.3", "修枝课 v0.1.3"),
+    ("set_language", "Language", "语言"), ("set_about", "About", "关于"), ("about_version", "Pruning Class v0.1.4", "修枝课 v0.1.4"),
     ("on", "On", "开"), ("off", "Off", "关"), ("lang_zh", "中", "中"), ("lang_en", "EN", "EN"),
     ("floor_virtual", "Virtual %1$+d cm", "虚拟 %1$+d cm"), ("floor_real", "Real floor", "真实地面"),
-    ("dialog_title", "Not available now", "现在用不了"), ("dialog_not_full_space", "Not in Full Space", "不在全空间"), ("dialog_no_head", "Head tracking is not available", "头部追踪不可用"),
+    ("dialog_title", "Not available now", "现在用不了"), ("dialog_help_full_space", "Open Pruning Class again from the app list so it runs in Full Space, then tap Retry", "从应用列表重新打开修枝课，让它进入全空间，再点重试"), ("dialog_help_head", "Put the headset on and look around for a moment, then tap Retry", "戴好头显，四处看一下，再点重试"), ("dialog_not_full_space", "Not in Full Space", "不在全空间"), ("dialog_no_head", "Head tracking is not available", "头部追踪不可用"),
 ]
 
 
