@@ -25,6 +25,8 @@ import com.pico.spatial.core.math.Color4
 import io.embodit.pruningclass.domain.model.Quat4
 import io.embodit.pruningclass.domain.model.Vec3
 import io.embodit.pruningclass.domain.tree.Branch
+import io.embodit.pruningclass.domain.tree.Species
+import io.embodit.pruningclass.domain.usecase.TapTargets
 import io.embodit.pruningclass.domain.tree.Wood
 import io.embodit.pruningclass.platform.PcLog
 import io.embodit.pruningclass.ui.theme.PcColors
@@ -274,7 +276,7 @@ internal class PcMeshes {
 }
 
 /** Tap bodies along a branch: a chain of capsules, radius max(r + 1.5 cm, 2.5 cm) (design `entities3d.tree`). */
-internal fun branchCollider(b: Branch): CollisionComponent {
+internal fun branchCollider(b: Branch, species: Species): CollisionComponent {
     val shapes = ArrayList<ShapeResource>()
     var s = 0f
     val step = 0.08f
@@ -284,7 +286,7 @@ internal fun branchCollider(b: Branch): CollisionComponent {
         val p1 = b.pointAt(e)
         val mid = (p0 + p1) * 0.5f
         val dir = (p1 - p0).normalized()
-        val r = maxOf(b.radiusAt(s) + 0.015f, 0.025f)
+        val r = TapTargets.branchRadius(b.radiusAt(s), species)
         val h = (p1 - p0).length
         val q = Quat4.fromTo(Vec3.UP, dir)
         runCatching { shapes += ShapeResource.createCapsule(r, h + 2 * r).offsetByTranslationAndRotation(q.sdk(), mid.sdk()) }
@@ -294,7 +296,7 @@ internal fun branchCollider(b: Branch): CollisionComponent {
 }
 
 /** One selectable branch (or a major one): its wood entities (one per wood) under a holder carrying the tap body. */
-internal class BranchView(parent: Entity, val branch: Branch) {
+internal class BranchView(parent: Entity, val branch: Branch, private val species: Species) {
     val holder: Entity = Entity().named("branch:${branch.id}")
     val parts = ArrayList<Entity>()
     private val partWoods = ArrayList<Wood>()
@@ -319,7 +321,7 @@ internal class BranchView(parent: Entity, val branch: Branch) {
         tappable = on
         runCatching {
             if (on) {
-                holder.components.set(branchCollider(branch))
+                holder.components.set(branchCollider(branch, species))
                 holder.components.set(InteractableComponent())
             } else {
                 holder.components.remove(InteractableComponent::class.java)

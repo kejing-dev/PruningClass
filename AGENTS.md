@@ -5,7 +5,7 @@ floor. Pick a branch, pick the bud on a numbered ladder beside it, tap again to 
 the rules (dead / diseased / damaged first, thin canes, crossing pairs, outward buds, leaders, the 20 % rule) and shows
 the tree next year with your cuts against the model answer. Six lessons: Rose 1 - 3, Apple 1 - 3; lesson 3 of each tree
 is an exam. PICO OS 6, Kotlin, PICO Spatial SDK 6.1.9, one Mixed Stage (Full Space, passthrough) for the tree plus one
-Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.5.
+Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.6.
 
 Design package (binding): `../spatial-app-factory/apps/pruning-class/design-package.json` (states S00 - S21, interactions
 I1 - I25, `rules`, `panels`, `entities3d`, `copy`). Tree look ported from the design's sample `trees.js`. Skeleton copied
@@ -22,8 +22,13 @@ v0.1.1. v0.1.3 (2026-11-04, profile D41) keeps the window, its TabBar and every 
 (`Clearance`, ClearanceTest) and draws the ray in every phase. v0.1.4 (2026-11-10, QA #2): every window page fills the
 window (FillCard), the volume is a snapping slider with louder sounds, and the rose's stand and pot are modelled
 (Tripo models assets/models/stand.glb + pot.glb via PropModels, decimated by tools/tripo-swap/prep_props.py;
-PropMesher's procedural stand / pot / soil is the fallback if a model fails to load). v0.1.5 (QA #3, D17): while a branch is selected no branch takes
-taps, only its bud ladder (`Pick`); [换一根枝] in the window / B / Y leaves the selection. Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
+PropMesher's procedural stand / pot / soil is the fallback if a model fails to load). v0.1.5 (QA #3, D17) + v0.1.6 (D52): branch bodies always
+take taps; with a branch selected a tap on another branch picks again, but a tap whose line (eye / controller -> hit)
+crosses a ring is the ring (`Pick.ringOnLine`, q3-1 kept); [换一根枝] in the window / Y / X leaves the selection.
+v0.1.6 (QA #4 q4-1, D17 at 2 degrees, the design changed by this station on the user's "直接改吧"): every tappable 3D
+target is sized by `TapTargets` (rings >= max(4.5 cm, 2.3 deg), gaps >= max(2 cm, 0.38 edge), the column in the plane
+facing the eye, 7 rings a page; scissors 1.6 x 2.6 edges; the cut face only shown); the crown is one target and the hit
+point picks the branch, letter rings (S07a) when several are close. Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
 
 ## Structure
 
@@ -45,7 +50,7 @@ app/src/main/java/io/embodit/pruningclass/
                                dockExplain (beside the crown), chipBesideTree; Clearance (D41: window footprint, tree
                                reach incl. next year);
                                PlaceMachine (LOCKED / PLACING); LevelGate (window opens only with the head level); Pick (what
-                               takes taps while a branch is selected)
+                               takes taps while a branch is selected); TapTargets (sizes, gaps, pages, crown pick)
   data/Store                   SharedPreferences "pruning_class": settings, records, graduations, cuts per lesson
   ui/theme                     PcColors (the only colour literals), PcTheme (PicoTheme), Noto fonts
   ui/pc                        PcViewModel (state machine + DebugJump), PcUiState / PcEvent / PcPages, PcShared (the one
@@ -99,14 +104,15 @@ written per frame in `PcScene.onFrame` and never goes through Compose.
   front), so the tree lands beside the window, not between you and it (no API places a window next to Stage content).
 - Stick: X turns the tree (60 deg/s, no snap), Y pushes / pulls along the you -> trunk line (rose 1.10 - 2.00 m, apple
   2.60 - 3.20 m: never nearer than where it was placed, D41); first axis past the dead zone wins. With a branch selected Y moves the bud cursor, trigger previews /
-  cuts; B / Y is the back key (leaves the preview, then the selection: no system back key reaches the app). Floor handle
+  cuts; B (right) or either grip confirms the previewed cut (D52, like the scissors); Y / X (left) is the back key (leaves
+the preview, then the selection: no system back key reaches the app). Floor handle
   drag: release within 0.15 m / 20 degrees snaps back onto the plant ring.
 - Cuts hide the pieces above the cut, drop a falling piece (0.6 s, fades in 2 s) and show a slanted cap. Mesh work is
   queued: at most 2 meshes per frame (dynamic mesh ANR lesson).
 - Controller ray: drawn by the app (the device showed no system ray in this Stage, v0.1.0 feedback): controller pose ->
   `scene.rayCast` -> nearest hit (the floor by plane arithmetic: no floor collider), 3 mm white beam + 14 mm dot, in
   every phase but STARTING / BLOCKED; hidden while the controller has no pose or its pose and time stamp are frozen
-  2 s; the trigger taps a branch / ladder ring / preview disc /
+  2 s; the trigger taps the crown (hit point picks the branch) / a ladder or letter ring /
   scissors it hits (not while the bud cursor or the replant ghost owns the trigger). System taps (eye-hand pinch, system
   ray) go the same way; a tap from the other source within 600 ms is the same press (dropped). The emulator has no controller pose
   (ControllerTrackingProvider unsupported): the ray never shows there.
@@ -135,11 +141,12 @@ synthesise a floor put a virtual one at 0.05.**
 | `autocut=perfect\|sloppy\|half\|major\|none\|all\|over25`, `hint=1\|0`, `done`, `view=now\|yours\|model`, `row=<id>` | answer sets and the result page |
 | `explain=keepBloom\|keepSpur\|major\|inwardBud\|tooMany\|tooLow\|inDead\|secondOfPair\|overPrune` | the explain card for that reason |
 | `rotate=<deg>`, `turn=<deg>`, `dist=<m>`, `pose` | turn / move the tree; `pose` moves it onto the head (S21) |
-| `ray=tree\|<branch id>\|ring[k]\|floor\|off\|tap` | a stand-in controller ray from the right hand's usual place aimed at that target (the emulator has no controller pose); drawn, hit-tested and logged like the real one; `ring3` = the ring of bud 3; `tap` = the trigger pressed once; `off` = the real controller |
+| `ray=tree\|<branch id>\|ring[k]\|letter<id>\|more\|scissors\|floor\|off\|tap` | a stand-in controller ray from the right hand's usual place aimed at that target (the emulator has no controller pose); drawn, hit-tested and logged like the real one; `ring3` = the ring of bud 3; `tap` = the trigger pressed once; `off` = the real controller |
 | `nofloor=1\|0`, `floor=arrive`, `blocked=1\|0`, `budzoom=1\|0`, `seated=1\|0`, `lang=zh\|en`, `mute=1\|0`, `testtex=1\|0` | sensing and settings ("F↑" on every textured plate) |
 | `settings`, `recall`, `replant`, `quit`, `again`, `next`, `close`, `card`, `release`, `clear`, `ui <control>` | panel actions; `recall` opens settings first (the button lives there); `card` works from the picker / settings. `ui` names: every worded button by its first argument (`done`, `undo`, `hint`, `set_quit`, `confirm_yes`, `replant_cancel`, ...), `sound`, `card_R1..card_A3`, `row_<id>` |
 | `window=close\|open`, `tab=lesson\|card\|settings`, `icons` | the window's × / the "open panel" chip; a TabBar press; every `ic_*` drawn by Android into `files/icons.png` (`adb exec-out run-as io.embodit.pruningclass cat files/icons.png > icons.png`) |
-| `rings` | `RINGS sel=<id> <bud>:(x, y, z) ...` for the shown ladder (tools/ring_sweep.sh projects them for eye-hand pinches) |
+| `rings` | `RINGS sel=<id> letters=<bool> edge=<m> <bud or branch>:(x, y, z) ... [scissors:(x, y, z)]` for the shown column (-2 / -3 = the "more" rings below / above; tools/targets.py measures and projects them) |
+| `tapat=<id>:<0..1>[:look]` | a crown tap at that point of that branch (the hit-point pick, like a pinch there; letters when several are close); `look` only logs the point |
 | `dump`, `hmd`, `panels`, `tree` | queries (`PC-TREE` lines for every selectable branch) |
 
 Log tag `PruningClass`: `PC-STATE <qaName> cuts= sel= prev= removed=` on every state change (qaName =
@@ -163,8 +170,10 @@ and chip are rebuilt 1.5 / 4 / 8 / 12 / 20 s after a change (the idle emulator c
 D41 evidence: `tools/shots_d41.sh <zh|en> <lesson> <dir>` (every phase: front / side 35 deg / ray at the tree, with
 `tools/cam_to.sh <yaw right> <pitch up>`, a closed loop on the `hmd` line: cam.sh's 0.0383 deg/px is 0.0537 here).
 Page blank (D44): `python tools/blank_meter.py <shots_panel frames>` (outer <= 25 %, inner band <= 20 %; edges only,
-a little stricter than by eye). Rings (q3-1): `tools/ring_sweep.sh <lesson> "<branch ids>" <dir>` (ray on every ring + a real eye-hand pinch on
-every ring; selection must not change). Stress: `tools/cold_start.sh 3`, `tools/stress_panels.sh 30` (in a lesson). Scripts default to emulator-5560. Stopping a
+a little stricter than by eye). Rings (q3-1 / q4-1): `tools/ring_sweep.sh <lesson> "<branch ids>" <dir>` (every page: geometry from the eye, ray on every
+ring, a real eye-hand pinch on every ring at the centre and off-centre, then the scissors; selection must not change).
+Branches: `tools/crown_sweep.sh <lesson> "<branch ids>" <dir>` (crown tap, letter rings: geometry, ray, pinch; a real
+pinch on the branch). Stress: `tools/cold_start.sh 3`, `tools/stress_panels.sh 30` (in a lesson). Scripts default to emulator-5560. Stopping a
 background script from the agent's task tool can leave its bash child running: check for stray `shots*.sh` processes
 before the next run.
 
@@ -189,9 +198,9 @@ plate in the chip slot. v0.1.1 rework "native window template": every 2D page in
 (lesson / rule card / settings) instead of docked Stage panels with a 3D drag bar; the tree 45 degrees right of the window
 instead of straight ahead; [Bring here] reopens the window; page-switch buttons removed (settings key, [Rule card]); the
 control page also lists this lesson's rules; the 6 m invisible "backstop" shell (tap on empty space -> leave the selection)
-is gone (factory D24 hard gate: no InteractableComponent on a room shell): a second tap on the selected branch or B / Y
+is gone (factory D24 hard gate: no InteractableComponent on a room shell): the ground ring, [换一根枝] or Y / X (v0.1.5: a second tap on the selected branch no longer)
 steps back instead; the explain card swings at most 15 degrees left of the tree line (the window is 45 degrees left).
 Earlier: control rows >= 48 dp (result page five review rows); hint / review marks are a whole-branch material tint instead of a dashed
 outline tube; bark is a procedural texture and leaves / flowers are mesh geometry (no CC0 textures in the APK); the bud
 cursor is stick + trigger; next year has no 0.4 s push-back step; ladder "more" rings show +/- and the base ring shows
-"✕" as text.
+"0" (D52; it was "✕", read as cancel). The scissors ghost is an open pair of scissors with 「剪下 · B / 握把」.

@@ -108,6 +108,12 @@ internal object DebugCommands {
             "rotate" -> scene?.rotate(arg.toFloat())
             "ray" -> PcLog.i("CMD ray ${scene?.aimRay(arg) ?: "no scene"}")
             "rings" -> PcLog.i(scene?.ringLine() ?: "RINGS no scene")
+            "tapat" -> {
+                val parts = arg.split(":")
+                val b = parts.getOrNull(0)?.toIntOrNull() ?: -1
+                val f = parts.getOrNull(1)?.toFloatOrNull() ?: 0.6f
+                PcLog.i("CMD tapat ${scene?.tapAt(b, f, tap = parts.getOrNull(2) != "look") ?: "no scene"}")
+            }
             "turn" -> host.dispatch(PcEvent.Turn(arg.toFloat()))
             "dist" -> scene?.distance(arg.toFloat())
             "window" -> host.window(!arg.equals("close", true))

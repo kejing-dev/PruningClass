@@ -19,7 +19,7 @@ case "${1:-}" in
     f=$(ls "$tmp" | head -1); [ -n "$f" ] && mv "$tmp/$f" "$dir/$2.png" && echo "$dir/$2.png" ;;
   log) if [ -n "${2:-}" ]; then "$ADB" -s "$DEV" logcat -d -s PruningClass:V | grep -E "$2"; else "$ADB" -s "$DEV" logcat -d -s PruningClass:V; fi ;;
   state) "$ADB" -s "$DEV" logcat -d -s PruningClass:V | grep "PC-STATE" | tail -1 | cut -c32- ;;
-  launch) "$ADB" -s "$DEV" shell monkey -p $PKG -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 ;;
+  launch) "$ADB" -s "$DEV" shell am start -n $PKG/.platform.LaunchActivity >/dev/null 2>&1 ;;  # monkey stopped starting the app on the emulator (2026-11-11)
   stop) "$ADB" -s "$DEV" shell am force-stop $PKG ;;
   install) "$ADB" -s "$DEV" install -r "$HERE/../app/build/outputs/apk/debug/app-debug.apk" ;;
   *) sed -n 2,8p "$0" ;;

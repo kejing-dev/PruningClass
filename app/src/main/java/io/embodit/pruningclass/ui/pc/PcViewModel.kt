@@ -1,5 +1,6 @@
 package io.embodit.pruningclass.ui.pc
 
+import io.embodit.pruningclass.domain.usecase.Pick
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.embodit.pruningclass.data.Store
@@ -101,7 +102,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
         when (e) {
             // ------------------------------------------------------------ start
             PcEvent.PanelsReady -> if (s.phase == Phase.STARTING) set { it.copy(phase = if (store.welcomed) Phase.PICKER else Phase.WELCOME) }
-            is PcEvent.BlockChanged -> e.reason?.let { r -> if (s.phase != Phase.BLOCKED) set { it.copy(phase = Phase.BLOCKED, blockReason = r, selected = null, preview = null, explain = null) } }
+            is PcEvent.BlockChanged -> e.reason?.let { r -> if (s.phase != Phase.BLOCKED) set { it.copy(phase = Phase.BLOCKED, blockReason = r, selected = null, preview = null, choice = null, explain = null) } }
             PcEvent.RetryBlocked -> if (s.phase == Phase.BLOCKED) set { it.copy(phase = Phase.STARTING, blockReason = null) }
             PcEvent.QuitBlocked -> quit()
             PcEvent.WelcomeGo -> if (s.phase == Phase.WELCOME) {
@@ -135,8 +136,12 @@ class PcViewModel(private val store: Store) : ViewModel() {
             // tapping the selected branch again steps back like the back key: the preview first, then the selection (there is
             // no room shell to catch a tap on empty space: factory D24 hard gate)
             is PcEvent.BranchTapped ->
-                if (s.phase == Phase.PRUNING && tree[e.branch]?.selectable == true) {
-                    if (s.selected == e.branch) handle(PcEvent.TappedElsewhere) else set { it.copy(selected = e.branch, preview = null) }
+                if (s.phase == Phase.PRUNING && tree[e.branch]?.selectable == true) set { it.copy(selected = e.branch, preview = null, choice = null) }
+            is PcEvent.CrownTapped ->
+                // D52: also with a branch selected (a tap on another branch picks again)
+                if (s.phase == Phase.PRUNING) {
+                    val r = Pick.afterCrownTap(s.selected, s.choice, e.near) { tree[it]?.selectable == true }
+                    if (r.selected != s.selected || r.choice != s.choice) set { it.copy(selected = r.selected, choice = r.choice, preview = null) }
                 }
             is PcEvent.BudTapped -> {
                 if (s.phase != Phase.PRUNING) return
@@ -147,11 +152,12 @@ class PcViewModel(private val store: Store) : ViewModel() {
                 val k = s.preview
                 if (s.phase == Phase.PRUNING && b != null && k != null) cut(Cut(b, k))
             }
-            PcEvent.PickAnother -> if (s.phase == Phase.PRUNING && s.selected != null) set { it.copy(selected = null, preview = null) }
+            PcEvent.PickAnother -> if (s.phase == Phase.PRUNING && (s.selected != null || s.choice != null)) set { it.copy(selected = null, preview = null, choice = null) }
             PcEvent.TappedElsewhere ->
                 when {
                     s.phase == Phase.PRUNING && s.preview != null -> set { it.copy(preview = null) }
                     s.phase == Phase.PRUNING && s.selected != null -> set { it.copy(selected = null) }
+                    s.phase == Phase.PRUNING && s.choice != null -> set { it.copy(choice = null) }
                 }
             PcEvent.Undo -> if (s.phase == Phase.PRUNING && s.cuts.isNotEmpty()) setCuts(s.cuts.dropLast(1), clearExplain = true)
             PcEvent.Rejoin -> if (s.phase == Phase.PRUNING && s.cuts.isNotEmpty()) setCuts(s.cuts.dropLast(1), clearExplain = true)
@@ -213,7 +219,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
                 when (s.phase) {
                     Phase.SETTINGS -> set { it.copy(phase = it.back, confirm = null) }
                     Phase.STARTING, Phase.BLOCKED, Phase.FINDING, Phase.PLACING, Phase.RELOCATING -> Unit
-                    else -> set { it.copy(phase = Phase.SETTINGS, back = s.phase, selected = null, preview = null, explain = null) }
+                    else -> set { it.copy(phase = Phase.SETTINGS, back = s.phase, selected = null, preview = null, choice = null, explain = null) }
                 }
             is PcEvent.Sound -> setSettings(s.settings.copy(sound = e.on))
             is PcEvent.VolumeSet -> setSettings(s.settings.copy(volume = e.v))
@@ -265,7 +271,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
             is PcEvent.DebugExplain -> {
                 val b = tree.branches.firstOrNull { it.label == Label.MUST } ?: return
                 val wrong = e.reason in setOf(Reason.KEEP_BLOOM, Reason.KEEP_SPUR, Reason.MAJOR, Reason.SECOND_OF_PAIR)
-                set { it.copy(explain = Explain(e.reason, b.id, wrong, canRejoin = wrong, serial = ++explainSerial), selected = null, preview = null) }
+                set { it.copy(explain = Explain(e.reason, b.id, wrong, canRejoin = wrong, serial = ++explainSerial), selected = null, preview = null, choice = null) }
             }
             is PcEvent.DebugNoFloor -> set { it.copy(debugNoFloor = e.on, floorReady = if (e.on) false else it.floorReady) }
             PcEvent.DebugFloorArrive -> set { it.copy(debugNoFloor = false) }
@@ -288,7 +294,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
     fun startLesson(l: LessonId) {
         hintTurned = false
         placeReturn = null
-        set { it.copy(lesson = l, cuts = emptyList(), score = null, view = View.NOW, selected = null, preview = null, explain = null, hints = false, removedPct = 0f) }
+        set { it.copy(lesson = l, cuts = emptyList(), score = null, view = View.NOW, selected = null, preview = null, choice = null, explain = null, hints = false, removedPct = 0f) }
         store.saveCuts(l, emptyList())
         if (_state.value.floorReady && !_state.value.debugNoFloor) set { it.copy(phase = Phase.PLACING, placeSerial = it.placeSerial + 1) }
         else set { it.copy(phase = Phase.FINDING, floorReady = false) }
@@ -299,7 +305,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
         val cuts = s.cuts + c
         PcGraph.sfx.play(Sfx.Kind.SNIP)
         setCuts(cuts, clearExplain = true)
-        set { it.copy(selected = null, preview = null) }
+        set { it.copy(selected = null, preview = null, choice = null) }
         val t = tree
         val b = t[c.branch]
         PcLog.i("CUT branch=${c.branch} bud=${c.bud} label=${b?.label} defect=${b?.defect} acceptable=${b?.acceptable}")
@@ -338,7 +344,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
         set {
             it.copy(
                 phase = if (graduateNow) Phase.GRADUATED else Phase.RESULT,
-                score = score, view = View.NOW, selected = null, preview = null, explain = null, hints = false,
+                score = score, view = View.NOW, selected = null, preview = null, choice = null, explain = null, hints = false,
                 records = records(), graduated = Species.entries.filter { sp -> store.graduated(sp) }.toSet(),
             )
         }
@@ -379,7 +385,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
             }
         PcLog.i("AUTOCUT $kind cuts=${cuts.size}")
         setCuts(cuts, clearExplain = true)
-        set { it.copy(selected = null, preview = null) }
+        set { it.copy(selected = null, preview = null, choice = null) }
     }
 
     private fun logNext() {
@@ -483,7 +489,7 @@ internal object DebugJump {
                 vm.dispatch(PcEvent.Placed)
                 vm.dispatch(PcEvent.StartPruning)
             }
-            vm.set { it.copy(selected = null, preview = null, explain = null) }
+            vm.set { it.copy(selected = null, preview = null, choice = null, explain = null) }
         }
         fun firstMust() = vm.tree.branches.first { it.label == Label.MUST && it.selectable && (it.acceptable != null || it.modelCut != null) }
         when (id) {

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Test harness for the PICO emulator, pinned to ONE device/AVD. Callable from Git Bash.
-#   DEV (default emulator-5564), AVD (default PICO_6_1_Factory3), PKG (default io.embodit.furniturefit), TAG (default SpatialRuler)
-#   (for the feasibility spike: PKG=io.embodit.rulerspike TAG=RulerSpike)
+#   DEV (default emulator-5564), AVD (default PICO_6_1_Factory3), PKG (default io.embodit.pruningclass), TAG (default PruningClass)
 #
 # Host input goes through emu.ps1 (PostMessage to the qemu PID of $AVD only; real cursor/focus untouched).
 #

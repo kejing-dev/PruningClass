@@ -56,6 +56,8 @@ data class PcUiState(
     val virtualFloor: Boolean = false,
     val floorNotice: String? = null,
     val selected: Int? = null,
+    /** Branches close together where the crown was tapped (q4-1): the letter rings ask which one (S07a). */
+    val choice: List<Int>? = null,
     val preview: Int? = null,
     val explain: Explain? = null,
     val hints: Boolean = false,
@@ -96,6 +98,7 @@ data class PcUiState(
                     phase == Phase.PRUNING && explain != null -> "S09"
                     phase == Phase.PRUNING && preview != null -> "S08"
                     phase == Phase.PRUNING && selected != null -> "S07"
+                    phase == Phase.PRUNING && choice != null -> "S07a"
                     phase == Phase.RESULT && view != View.NOW -> "S12"
                     phase == Phase.SETTINGS && confirm != null -> "S15b"
                     else -> phase.id
@@ -153,6 +156,9 @@ sealed interface PcEvent {
     data class FloorFound(val y: Float, val virtual: Boolean) : PcEvent
     data object Placed : PcEvent
     data class BranchTapped(val branch: Int) : PcEvent
+
+    /** The crown tapped (q4-1): [near] = the branches close to the hit point, nearest first; one selects, more ask. */
+    data class CrownTapped(val near: List<Int>) : PcEvent
     data class BudTapped(val branch: Int, val bud: Int) : PcEvent
     data object PreviewTapped : PcEvent
     data object TappedElsewhere : PcEvent

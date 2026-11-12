@@ -117,7 +117,7 @@ internal fun ControlPanel(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
             val turn = state.phase.inLesson
             WordButton("turn_left", rs(R.string.action_turn_left), { onEvent(PcEvent.Turn(-45f)) }, enabled = turn, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_rotate_left)
             // while a branch is selected the other branches cannot be tapped (only its bud ladder): this is the way out
-            WordButton("pick_another", rs(R.string.action_pick_another), { onEvent(PcEvent.PickAnother) }, enabled = pruning && state.selected != null, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_park)
+            WordButton("pick_another", rs(R.string.action_pick_another), { onEvent(PcEvent.PickAnother) }, enabled = pruning && (state.selected != null || state.choice != null), modifier = Modifier.weight(1f), iconRes = R.drawable.ic_park)
             WordButton("turn_right", rs(R.string.action_turn_right), { onEvent(PcEvent.Turn(45f)) }, enabled = turn, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_rotate_right)
         }
         ViewSegments(state, onEvent, enabled = false)

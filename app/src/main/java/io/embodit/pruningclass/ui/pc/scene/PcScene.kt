@@ -39,6 +39,7 @@ import io.embodit.pruningclass.domain.tree.Status
 import io.embodit.pruningclass.domain.tree.Tree
 import io.embodit.pruningclass.domain.usecase.Clearance
 import io.embodit.pruningclass.domain.usecase.Pick
+import io.embodit.pruningclass.domain.usecase.TapTargets
 import io.embodit.pruningclass.domain.usecase.PlaceMachine
 import io.embodit.pruningclass.domain.usecase.Placement
 import io.embodit.pruningclass.domain.usecase.Upright
@@ -209,8 +210,17 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private val ladderBud = ArrayList<Int>()
     private var ladderTag: Entity? = null
     private var ladderWindow = 0
+    /** Ring edge of the column now shown (0 = none), letters or buds, the letter-ring anchor (tree-local). */
+    private var ladderEdge = 0f
+    private var ladderFocusSeen: Int? = null
+    private var ladderLetters = false
+    private var choiceAnchor: Vec3? = null
+    private var choiceSeen: List<Int>? = null
+    private val tipPlates = ArrayList<Entity>()
     private var previewDisc: Entity? = null
     private var scissors: Entity? = null
+    private var scissorsAt: Vec3? = null
+    private var scissorsKey: Entity? = null
 
     // ---- next year
     private var nyRoot: Entity? = null
@@ -254,6 +264,8 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             setPosition(offset)
             setQuaternion(rotation)
         }
+        rootOffset = offset.domain()
+        rootRotation = rotation.domain()
         stageRoot = root
         val rig = PanelRig(root) { id, shown -> panelShown[id] = shown }
         this.rig = rig
@@ -367,10 +379,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         ladderRoot = Entity().named("ladder").also { root.addChild(it); it.enabled = false }
         for (i in 0 until LADDER_POOL) {
             val r = model(meshes.ring, mats.ladder, "ladder_ring_$i")
-            // the ring is scaled (dia / 2, 1, dia / 2): a flat box, 1.2 x the plate, 3 cm thick (createBox takes half sizes:
-            // 2.4 overlapped the next ring and the ray picked the bud above, QA v0.1.3) (a unit sphere stayed 1 m tall
-            // in Y and caught rays and taps a metre away from the ladder, v0.1.3 self-test)
-            r.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1.2f, 0.015f, 1.2f))), physicsMaterial = PhysicsMaterialResource()))
+            // the ring is scaled (edge / 2, 1, edge / 2): a flat box exactly the drawn square, 6 mm thick (createBox takes half
+            // sizes; q4-1: the hit box is no bigger than the ring, so the gap between rings is the gap between hit boxes)
+            r.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1.0f, 0.003f, 1.0f))), physicsMaterial = PhysicsMaterialResource()))
             r.components.set(InteractableComponent())
             ladderRoot!!.addChild(r)
             r.enabled = false
@@ -384,10 +395,10 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             if (i % 8 == 7) pace()
         }
         ladderTag = model(meshes.label, mats.ladder, "ladder_tag").also { ladderRoot!!.addChild(it); it.enabled = false }
+        // the letter beside each close branch's tip (q4-1 letters): not a target
+        for (i in 0 until TapTargets.PAGE + 2) tipPlates += model(meshes.plate, mats.ladder, "ladder_tip_$i").also { ladderRoot!!.addChild(it); it.enabled = false }
         previewDisc = model(meshes.disc, mats.preview, "preview_disc").also {
-            // scaled (r, 1, r) like the ladder rings: a flat box, not a sphere that stays 1.4 m in Y
-            it.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(1.4f, 0.015f, 1.4f))), physicsMaterial = PhysicsMaterialResource()))
-            it.components.set(InteractableComponent())
+            // only shown (q4-1: 1.3 - 2 cm, under the 4 cm floor): the cut is confirmed on the same ring or the scissors
             root.addChild(it)
             it.enabled = false
         }
@@ -397,8 +408,19 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         rayDot = model(meshes.disc, mats.rayDot, "controllerRayDot").also { root.addChild(it); it.enabled = false }
         scissors = Entity().named("scissors").also { s ->
             root.addChild(s)
-            for (k in 0 until 2) s.addChild(model(meshes.cube, mats.scissors, "blade_$k").also { it.setLocal(rotation = Quat4.axisAngle(Vec3(0f, 0f, 1f), (if (k == 0) 0.45f else -0.45f)), scale = Vec3(0.012f, 0.12f, 0.004f)) })
-            s.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(0.10f, 0.14f, 0.04f))), physicsMaterial = PhysicsMaterialResource()))
+            // an open pair of scissors (D52: two crossed bars read as an X = cancel): blades in a narrow V above the
+            // pivot, a finger loop under each, the key names under it
+            for (k in 0 until 2) {
+                val a = if (k == 0) 0.17f else -0.17f
+                val rot = Quat4.axisAngle(Vec3(0f, 0f, 1f), a)
+                s.addChild(model(meshes.cube, mats.scissors, "blade_$k").also { it.setLocal(position = rot.rotate(Vec3(0f, 0.032f, 0f)), rotation = rot, scale = Vec3(0.007f, 0.062f, 0.004f)) })
+                val cx = if (k == 0) 0.017f else -0.017f
+                for (bar in listOf(floatArrayOf(0f, 0.012f, 0.026f, 0.005f), floatArrayOf(0f, -0.012f, 0.026f, 0.005f), floatArrayOf(-0.0105f, 0f, 0.005f, 0.026f), floatArrayOf(0.0105f, 0f, 0.005f, 0.026f)))
+                    s.addChild(model(meshes.cube, mats.scissors, "loop_$k").also { it.setLocal(position = Vec3(cx + bar[0], -0.022f + bar[1], 0f), scale = Vec3(bar[2], bar[3], 0.004f)) })
+            }
+            scissorsKey = model(meshes.label, mats.ladder, "scissors_key").also { s.addChild(it); it.setLocal(position = Vec3(0f, -0.052f, 0.003f), scale = Vec3(0.075f, 0.075f, 1f)) }
+            // hit box 1.6 x 2.6 ring edges at the reference edge, scaled with the ladder (TapTargets, q4-1)
+            s.components.set(CollisionComponent(collisionShape = listOf(ShapeResource.createBox(Vector3(TapTargets.SCISSORS_W * TapTargets.MIN_EDGE / 2f, TapTargets.SCISSORS_H * TapTargets.MIN_EDGE / 2f, 0.02f))), physicsMaterial = PhysicsMaterialResource()))
             s.components.set(InteractableComponent())
             s.enabled = false
         }
@@ -524,7 +546,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         // one entity per selectable / major branch; non-selectable ones are drawn with their parent
         for (b in t.branches.filter { it.selectable || it.label == Label.MAJOR }) {
             jobs += {
-                val v = BranchView(root, b)
+                val v = BranchView(root, b, t.species)
                 branchViews[b.id] = v
                 v.setParts(TreeMesher.branch(t, b, null).map { (w, g) -> w to g.mesh("b${b.id}_$w") }, mats)
                 v.cutS = null
@@ -918,7 +940,12 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private fun stickFrame(now: Long, dt: Float) {
         val allowed = ui.phase in setOf(Phase.PRUNING, Phase.RESULT) && drag == null && placed != null
         // the controller's back key (B / Y) leaves the selection like a tap on empty space (design S07 / budCursor)
-        if (controller.takeBackPresses() > 0 && allowed && ui.selected != null) sink(PcEvent.TappedElsewhere)
+        if (controller.takeBackPresses() > 0 && allowed && (ui.selected != null || ui.choice != null)) sink(PcEvent.TappedElsewhere)
+        // B / grip confirms the previewed cut, like the scissors (D52)
+        if (controller.takeConfirmPresses() > 0 && allowed && ui.selected != null && ui.preview != null) {
+            PcLog.i("KEY confirm cut")
+            sink(PcEvent.PreviewTapped)
+        }
         val sample = if (allowed) controller.sample() else null
         val x = sample?.stickX ?: 0f
         val y = sample?.stickY ?: 0f
@@ -1011,6 +1038,11 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             hintSeen = ui.hintSerial
             facing(ui.explain?.branch)?.let { turnTo(it, 600f) }
         }
+        if (ui.choice != choiceSeen) {
+            choiceSeen = ui.choice
+            if (ui.selected == null) ladderWindow = 0
+            if (ui.choice == null) choiceAnchor = null
+        }
         if (ui.selected != selectedSeen) {
             selectedSeen = ui.selected
             cursor = null
@@ -1032,88 +1064,178 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         return p.position + Quat4.axisAngle(Vec3.UP, p.yaw + spin).rotate(local)
     }
 
+    private fun worldToTree(w: Vec3): Vec3 {
+        val p = placed ?: return w
+        return Quat4.axisAngle(Vec3.UP, -(p.yaw + spin)).rotate(w - p.position)
+    }
+
+    /**
+     * A tap on the crown (q4-1, design `rules.judge.tapTargets` 4): every branch body is one target; the hit point picks.
+     * One branch within [TapTargets.pickRadius] selects it; more put up the letter rings (S07a). Without a hit point (an
+     * old system event) the tapped body's branch is taken.
+     */
+    private fun crownTap(tapped: Int, stage: Vec3?, source: String) {
+        val t = tree ?: return
+        if (stage == null) {
+            PcLog.i("TAP crown branch=$tapped (no hit point) source=$source")
+            sink(PcEvent.CrownTapped(listOf(tapped)))
+            return
+        }
+        val local = worldToTree(stage)
+        val dist = stage.distanceTo(pose.position)
+        val radius = TapTargets.pickRadius(dist)
+        val shown = t.selectable.filter { branchViews[it.id] != null }
+        val near =
+            TapTargets.candidates(shown, { b -> branchViews[b.id]?.let { v -> if (v.gone) null else v.cutS?.takeIf { it.isFinite() } ?: b.length } }, local, radius, tapped.takeIf { branchViews[it]?.gone != true }, eye = worldToTree(pose.position))
+        PcLog.i("TAP crown branch=$tapped at=${PcLog.pos(stage)} dist=${PcLog.f(dist)} r=${PcLog.f(radius, 3)} near=$near source=$source")
+        if (near.size > 1) choiceAnchor = local
+        sink(PcEvent.CrownTapped(near))
+    }
+
+    /** Debug `tapat=<branch>:<0..1>`: a crown tap at that point of that branch (the same path as a pinch there). */
+    override fun tapAt(branch: Int, frac: Float, tap: Boolean): String {
+        val b = tree?.get(branch) ?: return "no branch $branch"
+        val w = treeToWorld(b.pointAt(b.length * frac.coerceIn(0f, 1f)))
+        if (!tap) return "look $branch:$frac at ${PcLog.pos(w)}"
+        crownTap(branch, w, "debug")
+        return "tapat $branch:$frac at ${PcLog.pos(w)}"
+    }
+
     private var branchesTappable = true
 
     private fun ladderFrame() {
-        // while a branch is selected only its ladder takes taps (Pick: ray and eye-hand pinch both reach the rings)
-        val tappable = Pick.branchesTappable(if (ui.phase == Phase.PRUNING) ui.selected else null)
+        // while a branch is selected or the letters ask, no branch takes taps (Pick: ray and eye-hand pinch reach the rings)
+        val choosing = ui.phase == Phase.PRUNING && ui.choice != null
+        val tappable = Pick.branchesTappable(if (ui.phase == Phase.PRUNING) ui.selected else null, choosing)
         // every frame (views built later, e.g. a rebuilt tree, follow too); setTappable only acts on a change
         for (v in branchViews.values) v.setTappable(tappable)
         if (tappable != branchesTappable) {
             branchesTappable = tappable
-            PcLog.i("PICK branches tappable=$tappable selected=${ui.selected}")
+            PcLog.i("PICK branches tappable=$tappable selected=${ui.selected} choice=${ui.choice}")
         }
         val lr = ladderRoot ?: return
         val mats = m ?: return
         val t = tree
         val sel = ui.selected?.let { t?.get(it) }
-        if (sel == null || ui.phase != Phase.PRUNING || t == null) {
+        val choice = if (sel == null && choosing) ui.choice?.mapNotNull { id -> t?.get(id)?.takeIf { branchViews[id]?.gone != true } } else null
+        val anchorLocal = choiceAnchor
+        if (t == null || ui.phase != Phase.PRUNING || (sel == null && (choice.isNullOrEmpty() || anchorLocal == null))) {
             lr.show(false)
+            ladderEdge = 0f
             return
         }
         lr.show(true)
-        val mid = treeToWorld(sel.pointAt(sel.length * 0.5f))
+        // the column: in front of the branch's middle (bud ladder) or of the tapped point (letters), towards the user
+        val mid = if (sel != null) treeToWorld(sel.pointAt(sel.length * 0.5f)) else treeToWorld(anchorLocal!!)
         val toUser = Vec3(pose.position.x - mid.x, 0f, pose.position.z - mid.z).normalized()
         val right = Vec3.UP.cross(toUser).normalized()
         val column = mid + toUser * 0.16f + right * 0.06f
-        val dist = column.distanceTo(pose.position)
-        val dia = (dist * Pick.RING_DIA_PER_M).coerceAtLeast(0.03f)
-        val gap = dia * Pick.RING_GAP
-        // entries: base (0) then buds; at most 16 shown, the rest by "more" rings
-        val all = listOf(0) + sel.buds.map { it.index }
-        val window = if (all.size <= MAX_RINGS) all else all.drop(ladderWindow).take(MAX_RINGS - 2)
-        val entries = ArrayList<Int>()
-        if (all.size > MAX_RINGS) entries += MORE_DOWN
-        entries += window
-        if (all.size > MAX_RINGS) entries += MORE_UP
-        val baseY = column.y - (entries.size - 1) * gap / 2f
-        val yaw = atan2(toUser.x, toUser.z)
-        val face = Quat4.axisAngle(Vec3.UP, yaw)
+        val eye = pose.position
+        // entries: bud ladder = base (0) then buds; letters = the close branches, highest tip on top
+        val all: List<Int> =
+            if (sel != null) listOf(0) + sel.buds.map { it.index }
+            else choice!!.sortedBy { tipOf(it).y }.map { it.id }
+        // the page follows the cursor / preview when they move (not back to a standing preview after a "more" tap)
+        val focusKey = if (sel != null) cursor ?: ui.preview else null
+        val focus = if (focusKey != ladderFocusSeen) focusKey?.let { all.indexOf(it) }?.takeIf { it >= 0 } else null
+        ladderFocusSeen = focusKey
+        val start = TapTargets.follow(all.size, ladderWindow, focus)
+        if (start != ladderWindow) {
+            ladderWindow = start
+            PcLog.i("LADDER page start=$start of ${all.size}")
+        }
+        val u = TapTargets.columnEdge(column.distanceTo(eye), all.size)
+        ladderEdge = u
+        val slots = TapTargets.page(all.size, start)
+        val colUp = TapTargets.columnUp(column, eye)
+        val centres = TapTargets.slotCentres(column, all.size, u, colUp)
+        ladderLetters = sel == null
         for (i in 0 until LADDER_POOL) {
             val r = ladderRings[i]
             val pl = ladderPlates[i]
             val line = ladderLines[i]
-            if (i >= entries.size) {
+            val tip = if (i < tipPlates.size) tipPlates[i] else null
+            val slot = if (i < slots.size) slots[i] else TapTargets.EMPTY
+            if (slot == TapTargets.EMPTY) {
                 r.show(false)
                 pl.show(false)
                 line.hide()
+                tip?.show(false)
                 ladderBud[i] = -1
                 continue
             }
-            val k = entries[i]
+            val k = if (slot >= 0) all[slot] else slot
             ladderBud[i] = k
-            val at = Vec3(column.x, baseY + i * gap, column.z)
-            val active = (ui.preview == k && k >= 0) || cursor == k
+            val at = centres[i]
+            // the ring's face turns to the eye (yaw and pitch): the angle it spans holds above and below eye level
+            val toEye = eye - at
+            val faceEye = Quat4.axisAngle(Vec3.UP, atan2(toEye.x, toEye.z)) * Quat4.axisAngle(Vec3.RIGHT, -atan2(toEye.y, kotlin.math.sqrt(toEye.x * toEye.x + toEye.z * toEye.z)))
+            val towards = toEye.normalized()
+            val active = sel != null && ((ui.preview == k && k >= 0) || cursor == k)
             r.show(true)
             r.setMaterial(if (active) mats.ladderActive else mats.ladder)
-            r.setLocal(position = at, rotation = face * PLATE, scale = Vec3(dia / 2f, 1f, dia / 2f))
+            r.setLocal(position = at, rotation = faceEye * PLATE, scale = Vec3(u / 2f, 1f, u / 2f))
             ringAt[i] = at
-            val text = when (k) {
-                0 -> "✕"
-                MORE_UP -> "+"
-                MORE_DOWN -> "-"
+            val text = when {
+                k == TapTargets.MORE_UP -> "+"
+                k == TapTargets.MORE_DOWN -> "-"
+                sel == null -> letter(slot, all.size)
+                k == 0 -> "0"
                 else -> k.toString()
             }
             val plateMat = if (ui.testTexture) mats.testF() else mats.text("n_$text", text, pill = false)
             if (plateMat != null) pl.setMaterial(plateMat)
             pl.show(true)
-            pl.setLocal(position = at + toUser * 0.002f, rotation = face, scale = Vec3(dia * 0.72f, dia * 0.72f, 1f))
-            if (k > 0) {
-                val bud = sel.buds.first { it.index == k }
-                line.draw(at - right * (dia / 2f), treeToWorld(bud.pos), 0.001f, toUser)
-            } else if (k == 0) {
-                line.draw(at - right * (dia / 2f), treeToWorld(sel.points.first()), 0.001f, toUser)
-            } else line.hide()
+            pl.setLocal(position = at + towards * 0.002f, rotation = faceEye, scale = Vec3(u * 0.72f, u * 0.72f, 1f))
+            when {
+                k < 0 -> {
+                    line.hide()
+                    tip?.show(false)
+                }
+                sel == null -> {
+                    // letters: a 1 mm line to that branch's tip, the same letter beside the tip
+                    val tipW = treeToWorld(tipOf(t[k]!!))
+                    line.draw(at - right * (u / 2f), tipW, 0.001f, toUser)
+                    if (tip != null) {
+                        val tm = if (ui.testTexture) mats.testF() else mats.text("n_$text", text, pill = false)
+                        if (tm != null) tip.setMaterial(tm)
+                        tip.show(true)
+                        val te = eye - tipW
+                        val tq = Quat4.axisAngle(Vec3.UP, atan2(te.x, te.z))
+                        tip.setLocal(position = tipW + te.normalized() * 0.03f + Vec3(0f, u * 0.45f, 0f), rotation = tq, scale = Vec3(u * 0.6f, u * 0.6f, 1f))
+                    }
+                }
+                k > 0 -> {
+                    tip?.show(false)
+                    val bud = sel!!.buds.first { it.index == k }
+                    line.draw(at - right * (u / 2f), treeToWorld(bud.pos), 0.001f, toUser)
+                }
+                else -> {
+                    tip?.show(false)
+                    line.draw(at - right * (u / 2f), treeToWorld(sel!!.points.first()), 0.001f, toUser)
+                }
+            }
         }
-        // the tag over the column: what to do now
+        // the tag over the column: what to do now (not a target)
         val tag = ladderTag ?: return
-        val key = if (ui.preview != null) "ladder_confirm" else "ladder_pick"
+        val key = when {
+            sel == null -> "ladder_choose"
+            ui.preview != null -> "ladder_confirm"
+            else -> "ladder_pick"
+        }
         val word = words(key)
         mats.text("tag_${key}_$word", word, pill = true)?.let { tag.setMaterial(it) }
         tag.show(true)
-        val w = dia * 4f
-        tag.setLocal(position = Vec3(column.x, baseY + entries.size * gap + dia * 0.4f, column.z), rotation = face, scale = Vec3(w, w, 1f))
+        val w = u * 5f
+        val top = centres.last()
+        tag.setLocal(position = top + colUp * (u / 2f + TapTargets.gap(u) + w * 0.12f), rotation = Quat4.axisAngle(Vec3.UP, atan2(toUser.x, toUser.z)), scale = Vec3(w, w, 1f))
     }
+
+    /** Where a branch now ends (its cut, or its tip), tree-local. */
+    private fun tipOf(b: io.embodit.pruningclass.domain.tree.Branch): Vec3 = b.pointAt(branchViews[b.id]?.cutS?.takeIf { it.isFinite() } ?: b.length)
+
+    /** A, B, C ... top down (slot is the entry index, bottom up). */
+    private fun letter(entry: Int, total: Int): String = ('A' + (total - 1 - entry)).toString()
 
     // ---- cut preview (design `entities3d.cutPreview`) --------------------------------------
 
@@ -1136,11 +1258,25 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val r = (b.radiusAt(s) * 1.6f).coerceAtLeast(0.008f)
         disc.show(true)
         disc.setLocal(position = p, rotation = Quat4.fromTo(Vec3.UP, n), scale = Vec3(r, 1f, r))
-        // scissors ghost beside the ladder, not over the rings
-        val toUser = Vec3(pose.position.x - p.x, 0f, pose.position.z - p.z).normalized()
+        // scissors ghost right of the ladder, level with the previewed ring, a 0.8-edge gap (TapTargets, q4-1)
+        val slot = ladderBud.indexOfFirst { it == k }
+        val ring = if (slot >= 0) ringAt[slot] else null
+        val u = ladderEdge
+        if (ring == null || u <= 0f) {
+            sc.show(false)
+            return
+        }
+        val toUser = Vec3(pose.position.x - ring.x, 0f, pose.position.z - ring.z).normalized()
         val right = Vec3.UP.cross(toUser).normalized()
         sc.show(true)
-        sc.setLocal(position = p + toUser * 0.12f + right * 0.22f, rotation = Quat4.axisAngle(Vec3.UP, atan2(toUser.x, toUser.z)))
+        scissorsKey?.let { key ->
+            val word = words("scissors_key")
+            m?.text("tag_scissors_key_$word", word, pill = true)?.let { key.setMaterial(it) }
+        }
+        val at = TapTargets.scissorsCentre(ring, right, u)
+        scissorsAt = at
+        val k2 = u / TapTargets.MIN_EDGE
+        sc.setLocal(position = at, rotation = Quat4.axisAngle(Vec3.UP, atan2(toUser.x, toUser.z)), scale = Vec3(k2, k2, 1f))
     }
 
     // ---- falling pieces --------------------------------------------------------------------
@@ -1421,7 +1557,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
      * A tap on [target] from the system pointer or the app's controller ray ([source]). One press can reach the app both
      * ways when the system pointer also works: the second tap on the same entity within 400 ms is dropped.
      */
-    private fun tapEntity(target: Entity, worldPos: Vec3?, source: String) {
+    private fun tapEntity(target: Entity, worldPos: Vec3?, source: String, stagePos: Vec3? = null, from: Vec3? = null) {
         val name = runCatching { target.getName() }.getOrNull() ?: "none"
         val now = SystemClock.elapsedRealtime()
         // one trigger press may arrive twice (our ray and the system pointer), not always on the same entity: whatever the
@@ -1437,18 +1573,31 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val ri = ladderRings.indexOfFirst { it.id == target.id && it.enabled }
         if (ri >= 0) {
             val k = ladderBud[ri]
-            val sel = ui.selected ?: return
-            when (k) {
-                MORE_UP -> ladderWindow += 8
-                MORE_DOWN -> ladderWindow = (ladderWindow - 8).coerceAtLeast(0)
-                else -> if (k >= 0) {
+            val total = if (ladderLetters) ui.choice?.size ?: 0 else (ui.selected?.let { tree?.get(it) }?.buds?.size ?: 0) + 1
+            when {
+                k == TapTargets.MORE_UP -> {
+                    ladderWindow = TapTargets.pageUp(total, ladderWindow)
+                    cursor = null
+                    PcLog.i("TAP ladder more=up start=$ladderWindow")
+                }
+                k == TapTargets.MORE_DOWN -> {
+                    ladderWindow = TapTargets.pageDown(ladderWindow)
+                    cursor = null
+                    PcLog.i("TAP ladder more=down start=$ladderWindow")
+                }
+                k >= 0 && ladderLetters && ui.selected == null -> {
+                    PcLog.i("TAP letter branch=$k")
+                    sink(PcEvent.BranchTapped(k))
+                }
+                k >= 0 -> {
+                    val sel = ui.selected ?: return
                     PcLog.i("TAP ladder bud=$k branch=$sel")
                     sink(PcEvent.BudTapped(sel, k))
                 }
             }
             return
         }
-        if (target.id == previewDisc?.id || target.id == scissors?.id) {
+        if (target.id == scissors?.id) {
             PcLog.i("TAP preview")
             sink(PcEvent.PreviewTapped)
             return
@@ -1462,8 +1611,26 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         }
         val bv = branchViews.values.firstOrNull { it.isGrab(target) }
         if (bv != null && ui.phase == Phase.PRUNING) {
-            PcLog.i("TAP branch=${bv.branch.id} ${bv.branch.label} ${bv.branch.defect}")
-            sink(PcEvent.BranchTapped(bv.branch.id))
+            // D52: with a branch selected or the letters up, a ring on the line of the tap wins (q3-1); otherwise the tap
+            // picks a branch again (the crown pick)
+            val stage = stagePos ?: worldPos?.let { toStage(it.x, it.y, it.z) }
+            if (stage != null && (ui.selected != null || ui.choice != null)) {
+                val shown = ladderRings.indices.filter { ladderRings[it].enabled && ringAt[it] != null && ladderBud[it] != TapTargets.EMPTY }
+                val i = Pick.ringOnLine(from ?: pose.position, stage, shown.map { ringAt[it]!! }, ladderEdge)
+                if (i != null) {
+                    PcLog.i("TAP branch:${bv.branch.id} -> ring on the line (slot ${shown[i]})")
+                    tapEntity(ladderRings[shown[i]], null, source)
+                    return
+                }
+                val sa = scissorsAt
+                if (sa != null && scissors?.enabled == true && ui.preview != null && Pick.scissorsOnLine(from ?: pose.position, stage, sa, ladderEdge)) {
+                    PcLog.i("TAP branch:${bv.branch.id} -> scissors on the line")
+                    PcLog.i("TAP preview")
+                    sink(PcEvent.PreviewTapped)
+                    return
+                }
+            }
+            crownTap(bv.branch.id, stage, source)
             return
         }
         if (now - cursorTapMs < 250L) return
@@ -1483,7 +1650,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         val root = stageRoot ?: return
         val live = ui.phase != Phase.STARTING && ui.phase != Phase.BLOCKED
         val real = if (live) controller.sample() else null
-        val s = real ?: if (live) debugRaySample() else null
+        // a debug aim (`ray=`) wins over a controller; a controller whose ray starts over a metre from the head is not in
+        // the Stage space (the emulator reports an untracked controller at the origin) and is ignored
+        val s = (if (live && debugAim != null) debugRaySample() else null) ?: real?.takeIf { it.ray.origin.distanceTo(pose.position) < 1.0f }
         if (s == null) {
             if (rayShown) PcLog.i("RAY hidden (${if (!live) "phase ${ui.phase}" else "no controller pose"})")
             rayShown = false
@@ -1552,7 +1721,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         // must not turn into "tapped elsewhere" (it would drop the selection)
         if (down && !rayTriggerWas && !onFloor && hit != null && cursor == null && ui.phase != Phase.RELOCATING && isRayTarget(hit.entity)) {
             PcLog.i("TAP ray target=${runCatching { hit.entity.getName() }.getOrNull()} dist=${PcLog.f(hit.distance)}")
-            tapEntity(hit.entity, null, "ray")
+            tapEntity(hit.entity, null, "ray", o + d * hit.distance, from = o)
         }
         rayTriggerWas = down
     }
@@ -1563,6 +1732,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
      * Only for the drawn ray while the branch bodies take no taps; never a tap.
      */
     private fun treeRayHit(o: Vec3, d: Vec3): Pair<Float, Int>? {
+        val t0 = tree ?: return null
         var best: Pair<Float, Int>? = null
         for (v in branchViews.values) {
             if (v.gone) continue
@@ -1573,7 +1743,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                 val s1 = minOf(end, s0 + 0.06f)
                 val a = treeToWorld(b.pointAt(s0))
                 val c = treeToWorld(b.pointAt(s1))
-                val r = maxOf(b.radiusAt(s0) + 0.015f, 0.025f)
+                val r = TapTargets.branchRadius(b.radiusAt(s0), t0.species)
                 // closest points of the ray and the segment a-c
                 val u = c - a
                 val w0 = o - a
@@ -1602,6 +1772,10 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     /** Debug `ray=`: where the right hand usually is, aimed at the chosen target (null when not aiming). */
     private fun debugRaySample(): ControllerSample? {
         val aim = debugAim ?: return null
+        // `ray=tap`: the trigger down for two frames, then up (the ray's own press edge). Taken before the target is looked
+        // up: when the first frame turns the page and the "more" slot goes away, the press must not wait for the next aim
+        val down = debugPressFrames > 0
+        if (down) debugPressFrames--
         val yaw = Placement.yawOf(pose.forward)
         val ahead = Placement.dirOfYaw(yaw)
         val right = Placement.dirOfYaw(yaw - Placement.rad(90f))
@@ -1615,6 +1789,12 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                     Vec3(p.position.x, floorY!!, p.position.z) + toUser * (treeReach * 0.5f + 0.4f)
                 }
                 aim == "floor" && floorY != null -> pose.position.let { Vec3(it.x, floorY!!, it.z) } + ahead * 1.2f
+                aim.startsWith("letter") -> {
+                    val id = aim.removePrefix("letter").toIntOrNull()
+                    ladderRings.indices.firstOrNull { ladderRings[it].enabled && ladderLetters && ladderBud[it] == id }?.let { ringAt[it] } ?: return null
+                }
+                aim == "scissors" -> scissorsAt ?: return null
+                aim == "more" -> ladderRings.indices.firstOrNull { ladderRings[it].enabled && ladderBud[it] == TapTargets.MORE_UP }?.let { ringAt[it] } ?: return null
                 aim.startsWith("ring") -> {
                     val k = aim.removePrefix("ring").toIntOrNull()
                     ladderRings.indices.firstOrNull { ladderRings[it].enabled && if (k == null) ladderBud[it] > 0 else ladderBud[it] == k }?.let { ringAt[it] } ?: return null
@@ -1624,27 +1804,28 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                 else -> pose.position + ahead * 2f
             }
         val dir = (target - origin).normalized()
-        // `ray=tap`: the trigger down for two frames, then up (the ray's own press edge)
-        val down = debugPressFrames > 0
-        if (down) debugPressFrames--
         return ControllerSample(PointerRay(origin, dir), trigger = if (down) 1f else 0f, pressed = down, stickX = 0f, stickY = 0f, right = true)
     }
 
     override fun ringLine(): String =
-        "RINGS sel=${ui.selected} " + ladderRings.indices.filter { ladderRings[it].enabled && ladderBud[it] >= 0 }.joinToString(" ") { "${ladderBud[it]}:${PcLog.pos(ringAt[it] ?: Vec3(0f, 0f, 0f))}" }
+        "RINGS sel=${ui.selected} letters=$ladderLetters edge=${PcLog.f(ladderEdge, 3)} " +
+            ladderRings.indices.filter { ladderRings[it].enabled && ladderBud[it] != TapTargets.EMPTY && ladderBud[it] != -1 }.joinToString(" ") { "${ladderBud[it]}:${PcLog.pos(ringAt[it] ?: Vec3(0f, 0f, 0f))}" } +
+            (scissorsAt?.takeIf { scissors?.enabled == true && ui.preview != null }?.let { " scissors:${PcLog.pos(it)}" } ?: "")
 
     override fun aimRay(target: String): String {
         if (target == "tap") {
             debugPressFrames = 2
             return "trigger pressed on aim=$debugAim"
         }
+        // a new aim never inherits a press left from an earlier `ray=tap`
+        debugPressFrames = 0
         debugAim = target.takeIf { it != "off" && it.isNotBlank() }
         rayTargetLogged = null
         return "aim=${debugAim ?: "real controller"}"
     }
 
     private fun isRayTarget(e: Entity): Boolean =
-        ladderRings.any { it.id == e.id && it.enabled } || e.id == previewDisc?.id || e.id == scissors?.id || branchViews.values.any { it.isGrab(e) }
+        ladderRings.any { it.id == e.id && it.enabled } || e.id == scissors?.id || branchViews.values.any { it.isGrab(e) }
 
     fun onSpatialDrag(phase: String, value: SpatialDragValue) {
         when (phase) {
@@ -1706,12 +1887,22 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         PcLog.i("DRAG tree end at=${PcLog.pos(np.position)}")
     }
 
+    /** stageRoot's transform inside the content (set in [attach]: it puts the root's origin on the world origin). */
+    private var rootOffset = Vec3(0f, 0f, 0f)
+    private var rootRotation = Quat4(0f, 0f, 0f, 1f)
+
+    /**
+     * A system gesture position (the view's local space) -> Stage space (stageRoot-local = world). convertPosition gives
+     * the point in the content's spatial space, where stageRoot is a child at [rootOffset] / [rootRotation]; undo that.
+     * (Until v0.1.6 the content-space point was read as root-local: every system tap point was off by the content
+     * view's offset, ~0.25 m on the emulator - a crown pinch measured 14 degrees off the gaze ray.)
+     */
     private fun toStage(x: Float, y: Float, z: Float): Vec3? {
         val c = content ?: return null
-        val root = stageRoot ?: return null
+        if (stageRoot == null) return null
         return runCatching {
-                val local = c.convertPosition(Vector3(x, y, z), ViewCoordinateSpace.Local, c.localSpatialCoordinateSpace)
-                root.convertPositionTo(local, null).domain()
+                val local = c.convertPosition(Vector3(x, y, z), ViewCoordinateSpace.Local, c.localSpatialCoordinateSpace).domain()
+                rootRotation.conjugate().rotate(local - rootOffset)
             }
             .getOrNull()
     }
@@ -1777,9 +1968,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         private const val DEAD = 0.15f
         private val TURN_RATE = Math.toRadians(60.0).toFloat()
         private const val LADDER_POOL = 32
-        private const val MAX_RINGS = 16
-        private const val MORE_UP = -2
-        private const val MORE_DOWN = -3
         private const val PX_M = 0.0004f
     }
 }

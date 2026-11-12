@@ -49,6 +49,8 @@ class ControllerInput {
     private val facePresses = AtomicInteger(0)
     private val backDown = AtomicBoolean(false)
     private val backPresses = AtomicInteger(0)
+    private val confirmDown = AtomicBoolean(false)
+    private val confirmPresses = AtomicInteger(0)
 
     private val listener =
         ControllerTrackingProvider.ControllerActionListener { action: ControllerActionData ->
@@ -56,10 +58,14 @@ class ControllerInput {
             val face = runCatching { action.right.aButtonPressed || action.left.xButtonPressed }.getOrDefault(false)
             if (face && !faceDown.getAndSet(true)) facePresses.incrementAndGet()
             if (!face) faceDown.set(false)
-            // B (right) or Y (left): the "back" key of the design (no system back key reaches the app)
-            val back = runCatching { action.right.bButtonPressed || action.left.yButtonPressed }.getOrDefault(false)
+            // Y or X (left): the "back" key of the design (no system back key reaches the app)
+            val back = runCatching { action.left.yButtonPressed || action.left.xButtonPressed }.getOrDefault(false)
             if (back && !backDown.getAndSet(true)) backPresses.incrementAndGet()
             if (!back) backDown.set(false)
+            // B (right) or either grip: confirm the previewed cut (D52: not X, which reads as cancel)
+            val confirm = runCatching { action.right.bButtonPressed || action.right.gripPressed || action.left.gripPressed }.getOrDefault(false)
+            if (confirm && !confirmDown.getAndSet(true)) confirmPresses.incrementAndGet()
+            if (!confirm) confirmDown.set(false)
             rightValue.set(java.lang.Float.floatToIntBits(action.right.triggerValue))
             rightPressed.set(action.right.triggerPressed)
             leftValue.set(java.lang.Float.floatToIntBits(action.left.triggerValue))
@@ -94,6 +100,9 @@ class ControllerInput {
     /** B / Y presses since the last call (counted on the press edge). */
     fun takeBackPresses(): Int = backPresses.getAndSet(0)
 
+    /** B (right) or a grip, counted on the press edge: confirms the previewed cut (D52). */
+    fun takeConfirmPresses(): Int = confirmPresses.getAndSet(0)
+
     /** Once per frame on the main thread. Null when no controller delivers a pose. */
     fun sample(): ControllerSample? {
         val p = provider ?: return null
@@ -117,6 +126,8 @@ class ControllerInput {
         val position = Vec3(pose.position.x, pose.position.y, pose.position.z)
         val rotation = Quat4(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w)
         if (!position.isFinite()) return null
+        // a pose exactly at the world origin is no pose (the emulator reports one for a controller it does not have)
+        if (position.length < 1e-3f) return null
         if (stale(stamp(data), position, rotation)) return null
         val forward = rotation.rotate(Vec3.AHEAD)
         if (!forward.isFinite() || forward.length < 0.5f) return null

@@ -78,6 +78,9 @@ object PcProbe {
 
         /** Debug `rings`: `RINGS <bud>:(x, y, z) ...` for every ring of the shown ladder (QA / ring_sweep.sh projects them). */
         fun ringLine(): String
+
+        /** Debug `tapat=<branch>:<0..1>[:look]`: a crown tap at that point of that branch (q4-1: the hit point picks, like a pinch); `look` only prints the point. */
+        fun tapAt(branch: Int, frac: Float, tap: Boolean = true): String
     }
 
     @Volatile var host: Host? = null
