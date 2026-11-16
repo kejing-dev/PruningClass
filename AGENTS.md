@@ -5,7 +5,7 @@ floor. Pick a branch, pick the bud on a numbered ladder beside it, tap again to 
 the rules (dead / diseased / damaged first, thin canes, crossing pairs, outward buds, leaders, the 20 % rule) and shows
 the tree next year with your cuts against the model answer. Six lessons: Rose 1 - 3, Apple 1 - 3; lesson 3 of each tree
 is an exam. PICO OS 6, Kotlin, PICO Spatial SDK 6.1.9, one Mixed Stage (Full Space, passthrough) for the tree plus one
-Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.6.
+Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.7.
 
 Design package (binding): `../spatial-app-factory/apps/pruning-class/design-package.json` (states S00 - S21, interactions
 I1 - I25, `rules`, `panels`, `entities3d`, `copy`). Tree look ported from the design's sample `trees.js`. Skeleton copied
@@ -24,11 +24,14 @@ window (FillCard), the volume is a snapping slider with louder sounds, and the r
 (Tripo models assets/models/stand.glb + pot.glb via PropModels, decimated by tools/tripo-swap/prep_props.py;
 PropMesher's procedural stand / pot / soil is the fallback if a model fails to load). v0.1.5 (QA #3, D17) + v0.1.6 (D52): branch bodies always
 take taps; with a branch selected a tap on another branch picks again, but a tap whose line (eye / controller -> hit)
-crosses a ring is the ring (`Pick.ringOnLine`, q3-1 kept); [换一根枝] in the window / Y / X leaves the selection.
+crosses a ring is the ring (`Pick.ringOnLine`, q3-1 kept); the ground ring / Y / X leaves the selection.
 v0.1.6 (QA #4 q4-1, D17 at 2 degrees, the design changed by this station on the user's "直接改吧"): every tappable 3D
 target is sized by `TapTargets` (rings >= max(4.5 cm, 2.3 deg), gaps >= max(2 cm, 0.38 edge), the column in the plane
 facing the eye, 7 rings a page; scissors 1.6 x 2.6 edges; the cut face only shown); the crown is one target and the hit
-point picks the branch, letter rings (S07a) when several are close. Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
+point picks the branch, letter rings (S07a) when several are close. v0.1.7 (QA #5 q5-1 B31, double ray, gates): at most 7
+controls a screen (lesson tab: Undo / Done / Hint / Turn 45; result tab: View / Review / Again / Next), buttons 64 dp, gaps
+16 dp; the app draws no controller ray any more (Full Space system ray, `RayPolicy`); settings has a How-to page; the tree
+drag adds up the per-event dragAmount (`DragTotal`). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
 
 ## Structure
 
@@ -109,10 +112,9 @@ the preview, then the selection: no system back key reaches the app). Floor hand
   drag: release within 0.15 m / 20 degrees snaps back onto the plant ring.
 - Cuts hide the pieces above the cut, drop a falling piece (0.6 s, fades in 2 s) and show a slanted cap. Mesh work is
   queued: at most 2 meshes per frame (dynamic mesh ANR lesson).
-- Controller ray: drawn by the app (the device showed no system ray in this Stage, v0.1.0 feedback): controller pose ->
-  `scene.rayCast` -> nearest hit (the floor by plane arithmetic: no floor collider), 3 mm white beam + 14 mm dot, in
-  every phase but STARTING / BLOCKED; hidden while the controller has no pose or its pose and time stamp are frozen
-  2 s; the trigger taps the crown (hit point picks the branch) / a ladder or letter ring /
+- Controller ray: the system's (v0.1.7, D41 corrected 2026-11-13 "double ray": the app's own beam + dot are gone; up to
+  v0.1.6 the app drew one because the v0.1.0 device showed no system ray in this Stage). System taps (pinch, system ray
+  trigger) tap the crown (hit point picks the branch) / a ladder or letter ring /
   scissors it hits (not while the bud cursor or the replant ghost owns the trigger). System taps (eye-hand pinch, system
   ray) go the same way; a tap from the other source within 600 ms is the same press (dropped). The emulator has no controller pose
   (ControllerTrackingProvider unsupported): the ray never shows there.
@@ -137,11 +139,12 @@ synthesise a floor put a virtual one at 0.05.**
 |---|---|
 | `state=S00..S21[:R1..A3]`, `S15b:quit\|reset` | replay the user's events to that state and hold it until `release` (S09 = explain card, S10 = hints, S11 = sloppy answer done, S12 = next year, S13 = graduation, S16 = blocked, S20 = relocating, S21 = inside the crown) |
 | `lesson=R1..A3` | pick that lesson on the picker |
+| `pickanother` | leave the selection / the letters (v0.1.7: the window key went) |
 | `select=<id>`, `preview=<id>:<bud\|base>`, `cut=<id>:<bud\|base>`, `undo` | tap a branch, tap a ladder ring, tap it again |
 | `autocut=perfect\|sloppy\|half\|major\|none\|all\|over25`, `hint=1\|0`, `done`, `view=now\|yours\|model`, `row=<id>` | answer sets and the result page |
 | `explain=keepBloom\|keepSpur\|major\|inwardBud\|tooMany\|tooLow\|inDead\|secondOfPair\|overPrune` | the explain card for that reason |
 | `rotate=<deg>`, `turn=<deg>`, `dist=<m>`, `pose` | turn / move the tree; `pose` moves it onto the head (S21) |
-| `ray=tree\|<branch id>\|ring[k]\|letter<id>\|more\|scissors\|floor\|off\|tap` | a stand-in controller ray from the right hand's usual place aimed at that target (the emulator has no controller pose); drawn, hit-tested and logged like the real one; `ring3` = the ring of bud 3; `tap` = the trigger pressed once; `off` = the real controller |
+| `ray=tree\|<branch id>\|ring[k]\|letter<id>\|more\|scissors\|floor\|off\|tap` | a stand-in controller ray from the right hand's usual place aimed at that target (the emulator has no controller pose); hit-tested and logged (`RAY hit=`), not drawn (v0.1.7); `ring3` = the ring of bud 3; `tap` = the trigger pressed once; `off` = the real controller |
 | `nofloor=1\|0`, `floor=arrive`, `blocked=1\|0`, `budzoom=1\|0`, `seated=1\|0`, `lang=zh\|en`, `mute=1\|0`, `testtex=1\|0` | sensing and settings ("F↑" on every textured plate) |
 | `settings`, `recall`, `replant`, `quit`, `again`, `next`, `close`, `card`, `release`, `clear`, `ui <control>` | panel actions; `recall` opens settings first (the button lives there); `card` works from the picker / settings. `ui` names: every worded button by its first argument (`done`, `undo`, `hint`, `set_quit`, `confirm_yes`, `replant_cancel`, ...), `sound`, `card_R1..card_A3`, `row_<id>` |
 | `window=close\|open`, `tab=lesson\|card\|settings`, `icons` | the window's × / the "open panel" chip; a TabBar press; every `ic_*` drawn by Android into `files/icons.png` (`adb exec-out run-as io.embodit.pruningclass cat files/icons.png > icons.png`) |
@@ -198,7 +201,7 @@ plate in the chip slot. v0.1.1 rework "native window template": every 2D page in
 (lesson / rule card / settings) instead of docked Stage panels with a 3D drag bar; the tree 45 degrees right of the window
 instead of straight ahead; [Bring here] reopens the window; page-switch buttons removed (settings key, [Rule card]); the
 control page also lists this lesson's rules; the 6 m invisible "backstop" shell (tap on empty space -> leave the selection)
-is gone (factory D24 hard gate: no InteractableComponent on a room shell): the ground ring, [换一根枝] or Y / X (v0.1.5: a second tap on the selected branch no longer)
+is gone (factory D24 hard gate: no InteractableComponent on a room shell): the ground ring or Y / X (v0.1.5: a second tap on the selected branch no longer)
 steps back instead; the explain card swings at most 15 degrees left of the tree line (the window is 45 degrees left).
 Earlier: control rows >= 48 dp (result page five review rows); hint / review marks are a whole-branch material tint instead of a dashed
 outline tube; bark is a procedural texture and leaves / flowers are mesh geometry (no CC0 textures in the APK); the bud

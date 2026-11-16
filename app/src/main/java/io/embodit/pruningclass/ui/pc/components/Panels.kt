@@ -17,6 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,7 +57,7 @@ import io.embodit.pruningclass.ui.pc.scene.PanelSpec
 import io.embodit.pruningclass.ui.theme.PcColors
 import kotlin.math.roundToInt
 
-private val Gap = 8.dp
+private val Gap = 16.dp // B31: side-by-side buttons >= 16 dp apart
 
 @Composable
 private fun Label(text: String, modifier: Modifier = Modifier, secondary: Boolean = false, maxLines: Int = 1) =
@@ -103,24 +108,22 @@ internal fun ControlPanel(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
-            WordButton("undo", rs(R.string.action_undo), { onEvent(PcEvent.Undo) }, enabled = pruning && state.cuts.isNotEmpty(), minWidth = 112.dp, iconRes = R.drawable.ic_undo)
+        // B31 (QA #5 q5-1): four controls on this page (+ the three tabs = 7; the sound switch is not counted), 64 dp tall,
+        // 16 dp apart. [Another branch] went: a tap on another branch picks it (D52), the ground ring / Y / X leave; the two
+        // turn keys became one (45 degrees each press; the stick turns both ways); the next-year views live on the result page.
+        Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            WordButton("undo", rs(R.string.action_undo), { onEvent(PcEvent.Undo) }, enabled = pruning && state.cuts.isNotEmpty(), minWidth = 132.dp, height = 64.dp, iconRes = R.drawable.ic_undo)
             if (state.phase == Phase.RELOCATING) {
                 // design S20: the main button becomes [Cancel]
                 MainButton("replant_cancel", rs(R.string.action_cancel), R.drawable.ic_close, true, Modifier.weight(1f)) { onEvent(PcEvent.CancelReplant) }
             } else {
                 MainButton("done", rs(R.string.action_done), R.drawable.ic_check, pruning, Modifier.weight(1f)) { onEvent(PcEvent.Done) }
             }
-            WordButton("hint", if (state.hints) rs(R.string.action_hint_on) else rs(R.string.action_hint_off), { onEvent(PcEvent.HintToggle) }, enabled = pruning && !state.exam, minWidth = 132.dp, iconRes = R.drawable.ic_lightbulb)
         }
-        Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
-            val turn = state.phase.inLesson
-            WordButton("turn_left", rs(R.string.action_turn_left), { onEvent(PcEvent.Turn(-45f)) }, enabled = turn, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_rotate_left)
-            // while a branch is selected the other branches cannot be tapped (only its bud ladder): this is the way out
-            WordButton("pick_another", rs(R.string.action_pick_another), { onEvent(PcEvent.PickAnother) }, enabled = pruning && (state.selected != null || state.choice != null), modifier = Modifier.weight(1f), iconRes = R.drawable.ic_park)
-            WordButton("turn_right", rs(R.string.action_turn_right), { onEvent(PcEvent.Turn(45f)) }, enabled = turn, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_rotate_right)
+        Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            WordButton("hint", if (state.hints) rs(R.string.action_hint_on) else rs(R.string.action_hint_off), { onEvent(PcEvent.HintToggle) }, enabled = pruning && !state.exam, modifier = Modifier.weight(1f), height = 64.dp, iconRes = R.drawable.ic_lightbulb)
+            WordButton("turn", rs(R.string.action_turn), { onEvent(PcEvent.Turn(45f)) }, enabled = state.phase.inLesson, modifier = Modifier.weight(1f), height = 64.dp, iconRes = R.drawable.ic_rotate_right)
         }
-        ViewSegments(state, onEvent, enabled = false)
         HintRow(state)
         // the window is sized for the tallest page: the rest of the lesson tab is this lesson's rules
         if (state.phase != Phase.STARTING) {
@@ -237,6 +240,7 @@ internal fun PickerPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) ->
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(Gap)) {
             for (sp in Species.entries) {
                 Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(Gap)) {
+                    // gate:allow button-gap a species name and its graduation badge, not buttons
                     Row(Modifier.height(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(text = rsn("species_${sp.name.lowercase()}"), color = PicoTheme.colorScheme.labelPrimary, style = PcType.chip)
                         if (sp in state.graduated) Icon(painter = painterResource(R.drawable.ic_workspace_premium), contentDescription = null, modifier = Modifier.size(20.dp), tint = PicoTheme.colorScheme.labelPrimary)
@@ -353,21 +357,45 @@ internal fun ResultPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) ->
             Icon(painter = painterResource(if (score.pass) R.drawable.ic_check else R.drawable.ic_close), contentDescription = null, modifier = Modifier.size(22.dp), tint = PicoTheme.colorScheme.labelPrimary)
             Title(verdict)
         }
-        ViewSegments(state, onEvent, enabled = true)
-        Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = if (state.view == View.NOW) Arrangement.Center else Arrangement.SpaceEvenly) {
-            if (state.view == View.NOW) ReviewRows(state, onEvent) else NextYearRows(state)
+        // B31 (QA #5 q5-1): four controls (+ the three tabs = 7), 64 dp, 16 dp apart. The three next-year views are one key
+        // that steps through them; the review rows are a list with one key that turns the tree to the next row (was five
+        // row buttons + three segments).
+        val rows = reviewRows(state)
+        var reviewAt by remember(state.score, state.lesson) { mutableIntStateOf(-1) }
+        Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            val nextView = View.entries[(state.view.ordinal + 1) % View.entries.size]
+            WordButton("view", rs(R.string.action_view, rsn("view_${state.view.name.lowercase()}")), { onEvent(PcEvent.ViewSelected(nextView)) }, modifier = Modifier.weight(1f), height = 64.dp, iconRes = R.drawable.ic_visibility)
+            WordButton(
+                "review_next",
+                rs(R.string.action_review, rows.size),
+                {
+                    if (rows.isNotEmpty()) {
+                        val k = (reviewAt + 1) % rows.size
+                        reviewAt = k
+                        if (state.view != View.NOW) onEvent(PcEvent.ViewSelected(View.NOW))
+                        onEvent(PcEvent.ReviewRow(rows[k].first))
+                    }
+                },
+                enabled = rows.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+                height = 64.dp,
+                iconRes = R.drawable.ic_arrow_forward,
+            )
         }
-        Row(Modifier.fillMaxWidth().height(56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
-            WordButton("again", rs(R.string.action_again), { onEvent(PcEvent.Again) }, modifier = Modifier.weight(1f), iconRes = R.drawable.ic_replay)
+        Column(Modifier.fillMaxWidth().weight(1f), verticalArrangement = if (state.view == View.NOW) Arrangement.Center else Arrangement.SpaceEvenly) {
+            if (state.view == View.NOW) ReviewRows(state, rows, reviewAt) else NextYearRows(state)
+        }
+        Row(Modifier.fillMaxWidth().height(72.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            WordButton("again", rs(R.string.action_again), { onEvent(PcEvent.Again) }, modifier = Modifier.weight(1f), height = 64.dp, iconRes = R.drawable.ic_replay)
             MainButton("next_lesson", rs(R.string.action_next_lesson), R.drawable.ic_arrow_forward, true, Modifier.weight(1f)) { onEvent(PcEvent.NextLesson) }
         }
     }
 }
 
-/** What was missed / off / wrong, wrong cuts first; a row turns the tree to that branch (design I14). Five rows. */
+/** What was missed / off / wrong, wrong cuts first: (branch, text, wrong). */
 @Composable
-private fun ReviewRows(state: PcUiState, onEvent: (PcEvent) -> Unit) {
-    val score = state.score ?: return
+private fun reviewRows(state: PcUiState): List<Triple<Int, String, Boolean>> {
+    val score = state.score ?: return emptyList()
     val t = TreeCache.get(state.lesson)
     val rows = ArrayList<Triple<Int, String, Boolean>>()
     for (w in score.wrongs) rows += Triple(w.branch, rs(R.string.row_wrong, rsn("defect_${t[w.branch]?.defect}")), true)
@@ -375,6 +403,12 @@ private fun ReviewRows(state: PcUiState, onEvent: (PcEvent) -> Unit) {
         val id = r.hit ?: r.ids.first()
         rows += Triple(id, if (r.credit == 0f) rs(R.string.row_missed, rsn("defect_${t[id]?.defect}")) else rs(R.string.row_half, rsn("defect_${t[id]?.defect}")), false)
     }
+    return rows.take(5)
+}
+
+/** The review list (not buttons, B31): the row the tree is turned to is marked; [Review] steps through them (design I14). */
+@Composable
+private fun ReviewRows(state: PcUiState, rows: List<Triple<Int, String, Boolean>>, at: Int) {
     if (rows.isEmpty()) {
         // nothing to review: the tick, and the rules this lesson practised (the block is a third of the window tall)
         FillCard(Modifier.fillMaxSize()) {
@@ -386,19 +420,18 @@ private fun ReviewRows(state: PcUiState, onEvent: (PcEvent) -> Unit) {
         }
         return
     }
-    for ((id, text, wrong) in rows.take(5)) {
-        val onClick = { onEvent(PcEvent.ReviewRow(id)) }
-        Button(
-            onClick = onClick,
-            modifier = Modifier.fillMaxWidth().height(52.dp).padding(bottom = 4.dp).probe("row_$id", onClick),
-            size = ButtonDefaults.Regular.copy(height = 48.dp, minWidth = 200.dp),
-            shape = RoundedCornerShape(12.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.fillTertiary, contentColor = PicoTheme.colorScheme.labelPrimary),
+    for ((i, row) in rows.withIndex()) {
+        val (_, text, wrong) = row
+        val current = i == at
+        Row(
+            Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(12.dp)).background(if (current) PicoTheme.colorScheme.fillSecondary else PicoTheme.colorScheme.fillTertiary).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(Modifier.size(12.dp).clip(RoundedCornerShape(6.dp)).background(if (wrong) PicoTheme.colorScheme.error else PicoTheme.colorScheme.alert))
             Spacer(Modifier.width(8.dp))
-            Text(text = text, color = PicoTheme.colorScheme.labelPrimary, style = PcType.label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), onTextLayout = overflowLog(text))
+            Text(text = text, color = PicoTheme.colorScheme.labelPrimary, style = PcType.label, maxLines = 1, modifier = Modifier.weight(1f), onTextLayout = overflowLog(text))
         }
+        Spacer(Modifier.height(4.dp))
     }
     Hint(rs(R.string.hint_result), Modifier.height(36.dp))
 }
@@ -456,6 +489,11 @@ private fun VolumeSlider(v: Volume, sound: Boolean, onEvent: (PcEvent) -> Unit) 
 
 @Composable
 internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) -> Unit) {
+    var howTo by remember { mutableStateOf(false) }
+    if (howTo && filled) {
+        HowToPage { howTo = false }
+        return
+    }
     WindowPage(padding = 12.dp, spacing = 0.dp) {
         if (!filled) return@WindowPage
         val s = state.settings
@@ -493,7 +531,7 @@ internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
         row(R.drawable.ic_restart_alt, rs(R.string.action_reset_lesson)) { WordButton("set_reset_lesson", rs(R.string.action_reset_lesson), { onEvent(PcEvent.ResetLesson) }, enabled = inLesson, minWidth = 220.dp, height = 48.dp) }
         row(R.drawable.ic_restart_alt, rs(R.string.action_reset_all)) { WordButton("set_reset_all", rs(R.string.action_reset_all), { onEvent(PcEvent.AskResetAll) }, danger = true, minWidth = 220.dp, height = 48.dp) }
         if (state.confirm == null) {
-            row(R.drawable.ic_info, rs(R.string.set_about)) { Label(rs(R.string.about_version), Modifier.width(220.dp), secondary = true) }
+            row(R.drawable.ic_info, rs(R.string.how_to_title)) { WordButton("set_howto", rs(R.string.how_to_open), { howTo = true }, minWidth = 220.dp, height = 48.dp, iconRes = R.drawable.ic_menu_book) }
             row(R.drawable.ic_logout, rs(R.string.action_quit)) { WordButton("set_quit", rs(R.string.action_quit), { onEvent(PcEvent.AskQuit) }, danger = true, minWidth = 220.dp, height = 48.dp, iconRes = R.drawable.ic_logout) }
         } else {
             // design S15b: the bottom of the page turns into the question + [Cancel] [Quit / Clear]
@@ -506,6 +544,39 @@ internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
                 WordButton("confirm_yes", if (quit) rs(R.string.action_quit_short) else rs(R.string.action_clear), { onEvent(PcEvent.ConfirmYes) }, danger = true, minWidth = 140.dp, iconRes = if (quit) R.drawable.ic_logout else R.drawable.ic_restart_alt)
             }
         }
+    }
+}
+
+/**
+ * "How to" (B19, settings): one row per main action, the hand way and the controller way (strings how_to_*), the version
+ * under it, [Back] to the settings.
+ */
+@Composable
+private fun HowToPage(onBack: () -> Unit) {
+    WindowPage(padding = 12.dp, spacing = 8.dp) {
+        Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap)) {
+            Title(rs(R.string.how_to_title), Modifier.weight(1f))
+            WordButton("howto_back", rs(R.string.action_back), onBack, minWidth = 132.dp, height = 48.dp, iconRes = R.drawable.ic_undo)
+        }
+        val items = listOf(
+            Triple(R.drawable.ic_park, R.string.how_to_select, R.string.how_to_select_how),
+            Triple(R.drawable.ic_content_cut, R.string.how_to_bud, R.string.how_to_bud_how),
+            Triple(R.drawable.ic_content_cut, R.string.how_to_cut, R.string.how_to_cut_how),
+            Triple(R.drawable.ic_park, R.string.how_to_switch, R.string.how_to_switch_how),
+            Triple(R.drawable.ic_rotate_right, R.string.how_to_turn, R.string.how_to_turn_how),
+            Triple(R.drawable.ic_drag_handle, R.string.how_to_move, R.string.how_to_move_how),
+            Triple(R.drawable.ic_check, R.string.how_to_done, R.string.how_to_done_how),
+        )
+        for ((icon, what, how) in items) {
+            Row(Modifier.fillMaxWidth().weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(painter = painterResource(icon), contentDescription = null, modifier = Modifier.size(24.dp), tint = PicoTheme.colorScheme.labelPrimary)
+                Column(Modifier.weight(1f)) {
+                    Label(rs(what))
+                    Label(rs(how), secondary = true, maxLines = 2)
+                }
+            }
+        }
+        Hint(rs(R.string.about_version), Modifier.height(28.dp))
     }
 }
 
@@ -537,6 +608,7 @@ internal fun ExplainCard(state: PcUiState, filled: Boolean, onEvent: (PcEvent) -
                 Reason.SECOND_OF_PAIR -> rs(R.string.explain_secondOfPair)
                 Reason.PARTIAL -> rs(R.string.explain_partial)
             }
+        // gate:allow button-gap a colour dot and the card title, not buttons
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(Modifier.size(12.dp).clip(RoundedCornerShape(6.dp)).background(if (e.wrong) PicoTheme.colorScheme.error else PicoTheme.colorScheme.alert))
             Title(title, Modifier.weight(1f))

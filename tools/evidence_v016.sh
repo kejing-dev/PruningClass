@@ -39,7 +39,7 @@ python "$D/blank_meter.py" "$V/pages"/win-*.png | tee "$V/pages/blank.txt"
 "$J" cmd 'preview=11:2'; w 4
 "$J" shot s08-scissors-zh "$V" >/dev/null
 "$J" cmd 'lang=en'; w 4; "$J" shot s08-scissors-en "$V" >/dev/null; "$J" cmd 'lang=zh'; w 2
-"$J" cmd 'ui pick_another'; w 2; "$J" cmd release
+"$J" cmd pickanother; w 2; "$J" cmd release
 
 # settings first screen (the volume slider) and the reset confirm
 "$J" cmd release; "$J" cmd 'tab=settings'; w 15; "$J" shot settings-firstscreen "$B" >/dev/null

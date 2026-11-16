@@ -39,6 +39,7 @@ import io.embodit.pruningclass.domain.tree.Status
 import io.embodit.pruningclass.domain.tree.Tree
 import io.embodit.pruningclass.domain.usecase.Clearance
 import io.embodit.pruningclass.domain.usecase.Pick
+import io.embodit.pruningclass.domain.usecase.DragTotal
 import io.embodit.pruningclass.domain.usecase.TapTargets
 import io.embodit.pruningclass.domain.usecase.PlaceMachine
 import io.embodit.pruningclass.domain.usecase.Placement
@@ -185,14 +186,16 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private var turningSent = false
     private var movingStickSent = false
     private var drag: DragKind? = null
-    private var rayBeam: Entity? = null
-    private var rayDot: Entity? = null
     private var rayTriggerWas = false
     private var rayShown = false
     private var lastTapId = -1L
     private var lastTapMs = 0L
     private var lastTapSource = ""
     private var dragPxToM = 0.001f
+    private var dragTotal = DragTotal()
+    private var dragStart = Vec3(0f, 0f, 0f)
+    private var dragRight = Vec3(1f, 0f, 0f)
+    private var dragFwd = Vec3(0f, 0f, -1f)
     private var insideSent = false
     private var rotateSeen = 0
     private var focusSeen = 0
@@ -404,8 +407,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         }
         // the app's own controller ray: the device showed none in this Stage (v0.1.0 device feedback), so the ray is drawn
         // here from the controller pose and the trigger acts on what it hits, like the system pointer
-        rayBeam = model(meshes.cube, mats.rayBeam, "controllerRay").also { root.addChild(it); it.enabled = false }
-        rayDot = model(meshes.disc, mats.rayDot, "controllerRayDot").also { root.addChild(it); it.enabled = false }
         scissors = Entity().named("scissors").also { s ->
             root.addChild(s)
             // an open pair of scissors (D52: two crossed bars read as an X = cancel): blades in a narrow V above the
@@ -1639,86 +1640,44 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     }
 
     /**
-     * The controller ray (design D1: controller ray + trigger, eye-hand + pinch): a 2.5 mm beam from the aiming controller
-     * to the first collider it hits (at most [RAY_MAX] m), a dot on the hit; a trigger press taps the hit entity. Hidden
-     * without a controller (hand mode: the system's gaze + pinch). The bud cursor (stick) and re-planting keep their own
-     * trigger use.
+     * D41 corrected (2026-11-13, double ray): Full Space draws the system controller ray, so the app draws none - no beam,
+     * no dot - and the real controller's trigger reaches the scene as a system tap ([onSpatialTap]). The app has no
+     * hand-held tool mode (the scissors are a target, not held), so there is no mode that has to hide the system ray
+     * ([RayPolicy]). Only the debug stand-in (`ray=`, the emulator has no controller pose) is ray-cast here: hit-tested and
+     * logged (`RAY hit=`), never drawn; its `tap` presses like a trigger.
      */
     private fun rayFrame(now: Long) {
-        val beam = rayBeam ?: return
-        val dot = rayDot ?: return
         val root = stageRoot ?: return
         val live = ui.phase != Phase.STARTING && ui.phase != Phase.BLOCKED
-        val real = if (live) controller.sample() else null
-        // a debug aim (`ray=`) wins over a controller; a controller whose ray starts over a metre from the head is not in
-        // the Stage space (the emulator reports an untracked controller at the origin) and is ignored
-        val s = (if (live && debugAim != null) debugRaySample() else null) ?: real?.takeIf { it.ray.origin.distanceTo(pose.position) < 1.0f }
+        val s = if (live && debugAim != null) debugRaySample() else null
         if (s == null) {
-            if (rayShown) PcLog.i("RAY hidden (${if (!live) "phase ${ui.phase}" else "no controller pose"})")
+            if (rayShown) PcLog.i("RAY hidden (${if (!live) "phase ${ui.phase}" else "no debug aim"})")
             rayShown = false
-            beam.show(false)
-            dot.show(false)
             rayTriggerWas = false
             return
         }
         val o = s.ray.origin
         val d = s.ray.direction
-        if (!rayShown) {
-            // where the ray starts relative to the head (yaw frame: right / up / ahead): a hand is ~0.2 / -0.3 / 0.3 m,
-            // anything else means the controller pose is not in the Stage's space
-            val rel = o - pose.position
-            val yaw = Placement.yawOf(pose.forward)
-            val ahead = Placement.dirOfYaw(yaw)
-            val right = Placement.dirOfYaw(yaw - Placement.rad(90f))
-            PcLog.i("RAY shown (${if (real == null) "debug aim $debugAim" else "controller ${if (s.right) "right" else "left"}"}) from head right=${PcLog.f(rel.dot(right))} up=${PcLog.f(rel.y)} ahead=${PcLog.f(rel.dot(ahead))} phase=${ui.phase}")
-        }
+        if (!rayShown) PcLog.i("RAY shown (debug aim $debugAim, not drawn) phase=${ui.phase}")
         rayShown = true
         val hit =
             runCatching {
                 root.scene?.rayCast(o.sdk(), d.sdk(), RAY_MAX, CollisionCastHitMode.ALL, CollisionGroup(CollisionGroup.COLLISION_GROUP_ALL), root)
-            }.getOrNull()?.results?.filter { it.entity.id != beam.id && it.entity.id != dot.id && it.entity.enabled }?.let { hits ->
+            }.getOrNull()?.results?.filter { it.entity.enabled }?.let { hits ->
                 // a bud ring on the line wins over whatever is nearer (q3-1): the ladder is what the user is aiming at
                 hits.filter { h -> ladderRings.any { it.id == h.entity.id } }.minByOrNull { it.distance } ?: hits.minByOrNull { it.distance }
             }
-        // while a branch is selected the branches take no taps (Pick), so the physics ray goes through them; the beam still
-        // ends on the wood it points at (D41: a visible hit dot in every phase), found on the branches' centre lines
-        val look = if (!branchesTappable && (hit == null || ladderRings.none { it.id == hit.entity.id })) treeRayHit(o, d) else null
-        if (look != null && (hit == null || look.first < hit.distance)) {
-            val len = look.first.coerceIn(0.02f, RAY_MAX)
-            beam.show(true)
-            beam.setLocal(position = o + d * (len / 2f), rotation = Quat4.fromTo(Vec3(0f, 0f, 1f), d), scale = Vec3(RAY_WIDTH, RAY_WIDTH, len))
-            dot.show(true)
-            dot.setLocal(position = o + d * (len - 0.002f), rotation = Quat4.fromTo(Vec3.UP, -d), scale = Vec3(RAY_DOT, 1f, RAY_DOT))
-            val target = "branch:${look.second}(look)"
-            if (target != rayTargetLogged) {
-                rayTargetLogged = target
-                PcLog.i("RAY hit=$target dist=${PcLog.f(len)} phase=${ui.phase}")
-            }
-            rayTriggerWas = s.pressed || s.trigger > 0.6f
-            return
-        }
         // the floor has no collider (D24): the ray meets its plane by arithmetic
         val fy = floorY
         val floorT = if (fy != null && d.y < -0.02f) ((fy - o.y) / d.y).takeIf { it in 0.05f..RAY_MAX } else null
         val onFloor = floorT != null && (hit == null || floorT < hit.distance)
         val len = (if (onFloor) floorT!! else hit?.distance ?: RAY_IDLE).coerceIn(0.02f, RAY_MAX)
-        beam.show(true)
-        beam.setLocal(position = o + d * (len / 2f), rotation = Quat4.fromTo(Vec3(0f, 0f, 1f), d), scale = Vec3(RAY_WIDTH, RAY_WIDTH, len))
-        if (onFloor || hit != null) {
-            dot.show(true)
-            val normal = if (onFloor) Vec3.UP else -d
-            dot.setLocal(position = o + d * (len - 0.002f) + normal * 0.002f, rotation = Quat4.fromTo(Vec3.UP, normal), scale = Vec3(RAY_DOT, 1f, RAY_DOT))
-        } else {
-            dot.show(false)
-        }
         val target = if (onFloor) "floor" else hit?.let { runCatching { it.entity.getName() }.getOrNull() } ?: "none"
         if (target != rayTargetLogged) {
             rayTargetLogged = target
             PcLog.i("RAY hit=$target dist=${PcLog.f(len)} phase=${ui.phase}")
         }
         val down = s.pressed || s.trigger > 0.6f
-        // only the app's own 3D targets: a panel (the explain card) is pressed by the system pointer, and an unknown hit
-        // must not turn into "tapped elsewhere" (it would drop the selection)
         if (down && !rayTriggerWas && !onFloor && hit != null && cursor == null && ui.phase != Phase.RELOCATING && isRayTarget(hit.entity)) {
             PcLog.i("TAP ray target=${runCatching { hit.entity.getName() }.getOrNull()} dist=${PcLog.f(hit.distance)}")
             tapEntity(hit.entity, null, "ray", o + d * hit.distance, from = o)
@@ -1835,6 +1794,11 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
                     target.id == handle?.id && (ui.phase == Phase.PRUNING || ui.phase == Phase.RESULT) && placed != null -> {
                         drag = DragKind.TREE
                         dragPxToM = PX_M * (0.67f + 1.186f * pose.position.distanceTo(placed!!.position).coerceAtLeast(0.3f))
+                        // D53 / drag-delta: dragAmount is per event; the tree goes to its start + the running total, axes frozen
+                        dragTotal = DragTotal()
+                        dragStart = placed!!.position
+                        dragRight = pose.right.let { Vec3(it.x, 0f, it.z).normalized() }
+                        dragFwd = Vec3(pose.forward.x, 0f, pose.forward.z).normalized()
                         sink(PcEvent.Moving(true))
                         PcLog.i("DRAG tree start")
                     }
@@ -1842,11 +1806,9 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
             }
             "move" -> {
                 val kind = drag ?: return
-                val a = value.dragAmount
-                val right = pose.right.let { Vec3(it.x, 0f, it.z).normalized() }
-                val fwd = Vec3(pose.forward.x, 0f, pose.forward.z).normalized()
+                val total = dragTotal.add(value.dragAmount.x, value.dragAmount.y)
                 when (kind) {
-                    DragKind.TREE -> placed?.let { p -> placed = p.copy(position = p.position + right * (a.x * dragPxToM) - fwd * (a.y * dragPxToM)) }
+                    DragKind.TREE -> placed?.let { p -> placed = p.copy(position = dragStart + dragRight * (total.first * dragPxToM) - dragFwd * (total.second * dragPxToM)) }
                 }
             }
             "end", "cancel" -> {
@@ -1953,8 +1915,6 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
 
         /** Controller ray: farthest hit, and the beam length when it hits nothing (m). */
         private const val RAY_MAX = 4f
-        private const val RAY_WIDTH = 0.003f
-        private const val RAY_DOT = 0.014f
 
         /** Clearance.reach per lesson (seven next-year builds: once per process). */
         private val reaches = HashMap<io.embodit.pruningclass.domain.tree.LessonId, Float>()

@@ -214,7 +214,7 @@ internal fun MainButton(name: String, label: String, iconRes: Int, enabled: Bool
     Button(
         onClick = { if (enabled) onClick() },
         modifier = modifier.alpha(if (enabled) 1f else 0.45f).probe(name, onClick),
-        size = ButtonDefaults.Regular.copy(height = 48.dp, minWidth = 120.dp),
+        size = ButtonDefaults.Regular.copy(height = 64.dp, minWidth = 120.dp), // B31: the main button >= 64 dp
         shape = CircleShape,
         enabled = enabled,
         colors = ButtonDefaults.buttonColors(containerColor = PicoTheme.colorScheme.interaction, contentColor = ink),

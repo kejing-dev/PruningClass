@@ -6,7 +6,7 @@
 #   tapat  - `tapat=<id>:0.5` (a crown tap at the middle of that branch, the same code as a pinch there): TAP crown
 #            near=[...] must hold the branch; one -> PC-STATE sel=<id>; more -> letter rings (S07a): geom on them,
 #            `ray=letter<id>` on each, then a real eye-hand pinch on each letter (centre and off-centre): TAP letter
-#            branch=<id> and PC-STATE sel=<id>; [换一根枝] (`ui pick_another`) and tapat again between letters;
+#            branch=<id> and PC-STATE sel=<id>; [换一根枝] (`pickanother`) and tapat again between letters;
 #   pinch  - a real eye-hand pinch on the middle of the branch (projected from the left eye): TAP system ... -> TAP crown;
 #            if the body hit is that branch, near must hold it.
 # Writes <out>/crown-<lesson>-b<id>.txt and one line per branch.
@@ -64,7 +64,7 @@ for b in $BRANCHES; do
     for pass in centre off; do
       for id in $ids; do
         # letters up again (the last pinch selected a branch)
-        "$J" cmd 'ui pick_another'; w 2; "$J" cmd "tapat=$b:0.5"; w 3
+        "$J" cmd pickanother; w 2; "$J" cmd "tapat=$b:0.5"; w 3
         "$ADB" -s "$DEV" logcat -c; "$J" cmd rings; w 2; rings=$(lastlog "RINGS sel=null letters=true")
         pose=$("$D/cam.sh" pose)
         if [ "$pass" = centre ]; then pt=$("$PY" "$D/targets.py" project "$pose" "$rings" --only "$id")
@@ -84,7 +84,7 @@ for b in $BRANCHES; do
   # a real eye-hand pinch on the middle of the branch. D52: with ANOTHER branch selected first (a tap on another branch
   # picks again; a ring of the selected branch's ladder on the line wins, q3-1)
   other=$(echo "$near" | tr ',' '\n' | grep -v "^$b$" | head -1)
-  "$J" cmd 'ui pick_another'; w 2
+  "$J" cmd pickanother; w 2
   if [ -n "$other" ]; then "$J" cmd "select=$other"; w 4; fi
   "$ADB" -s "$DEV" logcat -c; "$J" cmd "tapat=$b:0.5:look"; w 2
   look=$(lastlog "CMD tapat look")
@@ -111,7 +111,7 @@ if a and b and h:
   elif [ "$hitb" = "$b" ]; then case "$crown" in *"near=["*"$b"*) ;; *) pn="bad (hit $b, not offered)" ;; esac
   else pn="ok (body in front: branch $hitb)"; fi
   [ -n "$other" ] && [ -z "$ring" ] && case "$st" in *"sel=$other "*) pn="$pn | D52 bad: still $other" ;; *) pn="$pn | D52 ok: picked again from $other" ;; esac
-  "$J" cmd 'ui pick_another'; w 1; "$J" cmd release
+  "$J" cmd pickanother; w 1; "$J" cmd release
   echo "$L branch $b: tapat $first | letters $letters (ray ok $rayok bad $raybad, pinch ok $lok bad $lbad, harness no tap $nosent) | pinch on branch: $pn" | tee -a "$f"
 done
 "$D/cam_to.sh" 0 0 >/dev/null

@@ -72,6 +72,8 @@ internal object DebugCommands {
             "state", "goto" -> host.dispatch(PcEvent.DebugState(arg))
             "lesson" -> host.dispatch(PcEvent.LessonPicked(LessonId.of(arg) ?: return PcLog.i("CMD lesson needs R1..A3")))
             "select" -> host.dispatch(PcEvent.BranchTapped(arg.toInt()))
+            // leave the selection / the letters (the window's [Another branch] key went in v0.1.7, B31)
+            "pickanother" -> host.dispatch(PcEvent.PickAnother)
             // the user taps the branch only when it is not selected yet (a second tap on it steps back)
             "preview" -> {
                 val (b, k) = arg.split(':')

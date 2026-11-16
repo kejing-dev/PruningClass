@@ -163,7 +163,7 @@ sealed interface PcEvent {
     data object PreviewTapped : PcEvent
     data object TappedElsewhere : PcEvent
 
-    /** [换一根枝] in the window: leave the preview and the selection at once (q3-1: branches cannot be tapped meanwhile). */
+    /** Leave the preview and the selection at once (debug `pickanother`; the window key went in v0.1.7, B31) (q3-1: branches cannot be tapped meanwhile). */
     data object PickAnother : PcEvent
     data class BudCursor(val bud: Int) : PcEvent
     data object Trigger : PcEvent
