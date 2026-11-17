@@ -5,7 +5,7 @@ floor. Pick a branch, pick the bud on a numbered ladder beside it, tap again to 
 the rules (dead / diseased / damaged first, thin canes, crossing pairs, outward buds, leaders, the 20 % rule) and shows
 the tree next year with your cuts against the model answer. Six lessons: Rose 1 - 3, Apple 1 - 3; lesson 3 of each tree
 is an exam. PICO OS 6, Kotlin, PICO Spatial SDK 6.1.9, one Mixed Stage (Full Space, passthrough) for the tree plus one
-Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.7.
+Planar system window for every 2D page, package `io.embodit.pruningclass`, v0.1.8.
 
 Design package (binding): `../spatial-app-factory/apps/pruning-class/design-package.json` (states S00 - S21, interactions
 I1 - I25, `rules`, `panels`, `entities3d`, `copy`). Tree look ported from the design's sample `trees.js`. Skeleton copied
@@ -31,7 +31,9 @@ facing the eye, 7 rings a page; scissors 1.6 x 2.6 edges; the cut face only show
 point picks the branch, letter rings (S07a) when several are close. v0.1.7 (QA #5 q5-1 B31, double ray, gates): at most 7
 controls a screen (lesson tab: Undo / Done / Hint / Turn 45; result tab: View / Review / Again / Next), buttons 64 dp, gaps
 16 dp; the app draws no controller ray any more (Full Space system ray, `RayPolicy`); settings has a How-to page; the tree
-drag adds up the per-event dragAmount (`DragTotal`). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
+drag adds up the per-event dragAmount (`DragTotal`). v0.1.8 (2026-11-16 headset feedback "不要整个都高亮白色"): the
+selected branch keeps its own wood / hint colour and is only lifted by emissive (`Highlight.LIFT` 15 %, HighlightTest);
+the other branches fade to 0.7 except those carrying a mark (hint orange, dead / diseased / canker wood). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
 
 ## Structure
 

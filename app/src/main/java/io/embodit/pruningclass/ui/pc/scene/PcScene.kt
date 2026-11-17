@@ -40,6 +40,7 @@ import io.embodit.pruningclass.domain.tree.Tree
 import io.embodit.pruningclass.domain.usecase.Clearance
 import io.embodit.pruningclass.domain.usecase.Pick
 import io.embodit.pruningclass.domain.usecase.DragTotal
+import io.embodit.pruningclass.domain.usecase.Highlight
 import io.embodit.pruningclass.domain.usecase.TapTargets
 import io.embodit.pruningclass.domain.usecase.PlaceMachine
 import io.embodit.pruningclass.domain.usecase.Placement
@@ -899,7 +900,7 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
     private var ghostsFor: List<Int> = emptyList()
     private var movingStick = false
 
-    /** Hints / review marks / the selection, by material swap (design `hint`, `review`, S07). */
+    /** Hints / review marks by material swap (design `hint`, `review`); the selection (S07) only lifts its own wood. */
     private fun tintFrame(t: Tree) {
         val mats = m ?: return
         val review = ui.phase == Phase.RESULT && ui.view == View.NOW
@@ -907,14 +908,12 @@ class PcScene(private val sink: (PcEvent) -> Unit) : PcProbe.SceneProbe {
         for ((id, v) in branchViews) {
             val b = v.branch
             val uncutMust = b.label == Label.MUST && st[id] == Status.Intact
-            val mat =
-                when {
-                    ui.selected == id && ui.phase == Phase.PRUNING -> mats.selected
-                    (ui.hints && ui.phase == Phase.PRUNING || review) && uncutMust && (ui.phase != Phase.RESULT || ui.view == View.NOW) -> mats.hint
-                    else -> null
-                }
-            v.tint(mat, mats)
-            v.holder.fade(if (ui.selected != null && ui.selected != id && ui.phase == Phase.PRUNING) 0.7f else 1f)
+            val hinted = (ui.hints && ui.phase == Phase.PRUNING || review) && uncutMust && (ui.phase != Phase.RESULT || ui.view == View.NOW)
+            // the selection keeps the branch's own colour (2026-11-16 headset feedback): no white, a small lift only
+            val pruning = ui.phase == Phase.PRUNING
+            val mat = if (Highlight.look(hinted) == Highlight.Look.HINT) mats.hint else null
+            v.tint(mat, mats, lifted = Highlight.lifted(id, ui.selected, pruning))
+            v.holder.fade(Highlight.opacity(id, ui.selected, pruning, hinted, v.woods))
         }
         // wrong cuts come back as red ghosts in the review
         // keyed on what is wanted, not on how many exist: the ghosts are built later by queued jobs

@@ -28,6 +28,7 @@ import io.embodit.pruningclass.domain.tree.Branch
 import io.embodit.pruningclass.domain.tree.Species
 import io.embodit.pruningclass.domain.usecase.TapTargets
 import io.embodit.pruningclass.domain.tree.Wood
+import io.embodit.pruningclass.domain.usecase.Highlight
 import io.embodit.pruningclass.platform.PcLog
 import io.embodit.pruningclass.ui.theme.PcColors
 import kotlin.math.PI
@@ -59,7 +60,12 @@ internal fun Entity.fade(opacity: Float) {
 internal class PcMaterials(private val shared: SharedResources) {
     private val woods = HashMap<Wood, Material>()
 
-    fun wood(w: Wood): Material = woods.getOrPut(w) { barked(woodColor(w), w.ordinal + 3) }
+    private val woodsLifted = HashMap<Wood, Material>()
+
+    fun wood(w: Wood): Material = woods.getOrPut(w) { barked(woodColor(w), w.ordinal + 3, 0f) }
+
+    /** The selected branch: its own wood, lifted a little by emissive (Highlight.LIFT, <= 20 %), never white. */
+    fun woodLifted(w: Wood): Material = woodsLifted.getOrPut(w) { barked(woodColor(w), w.ordinal + 3, Highlight.LIFT) }
 
     // buds are tiny: unlit keeps their exact colour (lit, the key light washed them to pale pink)
     val budRose: Material = unlit(PcColors.BudRose)
@@ -88,7 +94,6 @@ internal class PcMaterials(private val shared: SharedResources) {
     val preview: Material = sheer(PcColors.Interaction, 0.6f)
     val scissors: Material = sheer(PcColors.White, 0.5f)
     val hint: Material = unlit(PcColors.Alert)
-    val selected: Material = sheer(PcColors.White, 0.55f)
     val wrongGhost: Material = sheer(PcColors.Error, 0.4f)
     val fallenWrong: Material = unlit(PcColors.Error)
     val ghost: Material = sheer(PcColors.Interaction, 0.35f)
@@ -113,7 +118,7 @@ internal class PcMaterials(private val shared: SharedResources) {
             Wood.CANKER -> PcColors.Canker
         }
 
-    private fun barked(color: Color, seed: Int): Material =
+    private fun barked(color: Color, seed: Int, lift: Float): Material =
         runCatching {
                 val tex = shared.keep(TextureResource.create(Textures.bark(color, seed)))
                 shared.keep(
@@ -122,7 +127,7 @@ internal class PcMaterials(private val shared: SharedResources) {
                         setBaseColorTexture(tex)
                         setMetallic(0f)
                         setRoughness(0.85f)
-                        setEmissiveColor(Color4(color.red * 0.05f, color.green * 0.05f, color.blue * 0.05f, 1f))
+                        setEmissiveColor(Color4(color.red * (0.05f + lift), color.green * (0.05f + lift), color.blue * (0.05f + lift), 1f))
                     }
                 ) as Material
             }
@@ -301,6 +306,7 @@ internal class BranchView(parent: Entity, val branch: Branch, private val specie
     var cutS: Float? = Float.NaN
     var gone = false
     private var tinted: Material? = null
+    private var lifted = false
 
     private var tappable = false
 
@@ -333,7 +339,7 @@ internal class BranchView(parent: Entity, val branch: Branch, private val specie
         parts.clear()
         partWoods.clear()
         for ((w, mesh) in meshes) {
-            val e = model(mesh, tinted ?: m.wood(w), "wood:${branch.id}:$w")
+            val e = model(mesh, tinted ?: ownWood(w, m), "wood:${branch.id}:$w")
             runCatching { e.components.set(GroundShadowComponent(true, false)) }
             holder.addChild(e)
             parts += e
@@ -341,12 +347,18 @@ internal class BranchView(parent: Entity, val branch: Branch, private val specie
         }
     }
 
-    /** Material override for the whole branch (hint / review orange, selection white), null = its own wood. */
-    fun tint(material: Material?, m: PcMaterials) {
-        if (material === tinted) return
+    /** Material override for the whole branch (hint / review orange), null = its own wood; [lifted] = selected (Highlight). */
+    fun tint(material: Material?, m: PcMaterials, lifted: Boolean = false) {
+        if (material === tinted && lifted == this.lifted) return
         tinted = material
-        for ((i, e) in parts.withIndex()) e.setMaterial(material ?: m.wood(partWoods[i]))
+        this.lifted = lifted
+        for ((i, e) in parts.withIndex()) e.setMaterial(material ?: ownWood(partWoods[i], m))
     }
+
+    val woods: List<Wood>
+        get() = partWoods
+
+    private fun ownWood(w: Wood, m: PcMaterials): Material = if (lifted) m.woodLifted(w) else m.wood(w)
 
     fun isGrab(e: Entity): Boolean = holder.enabled && e.id == holder.id
 

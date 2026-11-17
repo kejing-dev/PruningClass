@@ -1,6 +1,6 @@
 # 修枝课 Pruning Class
 
-> **v0.1.7 · 预发布 · 模拟器 QA 通过，真机未验证**（Pre-release · passed emulator QA, not yet verified on a headset）
+> **v0.1.8 · 研发版（待 QA）**：选中的枝保留本色（不再整根变白），其余枝淡化但带标记的不淡（Build for QA · the selected branch keeps its own colour）
 
 **安装 / Install**（APK 在 [Release v0.1.7](https://github.com/kejing-dev/PruningClass/releases/tag/v0.1.7)）：
 
@@ -24,6 +24,7 @@ If an older build signed on another machine is installed and you get `INSTALL_FA
 
 - **两种树各 3 课**：月季（枯病伤与细弱枝 → 交叉、芽向、留芽数 → 综合考试）；苹果（枯病伤、根蘖、徒长枝 → 树心、延长枝、别剪太多 → 综合考试）。第 3 课是不给提示的考试
 - **芽环大、好点**：每个芽环 ≥ 4.5 cm（≥ 2.3°）、隔开 ≥ 2 cm，一页 7 个，「更多」翻页；几根枝挨得太近时先出字母环，点字母选枝
+- **选中不盖颜色**：选中的枝保留树皮本色和枯 / 病 / 提示色，只轻微提亮（≤ 20 %），旁边的芽环和提示卡表示选中
 - **换枝不用按钮**：选中一根枝时直接点另一根就换；点地上的圆圈或按 Y / X 退出
 - **控制窗**：系统原生窗口，三个页签（修枝 / 口诀卡 / 设置）。修剪页只有 [撤销] [剪完了] [提示] [转 45°]，按钮 64 dp、间距 16 dp
 - **成绩页**：剪对几根、误剪几根、去除量；一个键在「现在 / 你的明年 / 标准明年」之间切换，[逐条看] 列出每一刀
