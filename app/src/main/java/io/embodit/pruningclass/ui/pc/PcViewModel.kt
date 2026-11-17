@@ -237,9 +237,9 @@ class PcViewModel(private val store: Store) : ViewModel() {
             PcEvent.Replant -> if (s.phase == Phase.SETTINGS && s.back.inLesson) set { it.copy(phase = Phase.RELOCATING) }
             PcEvent.Replanted -> if (s.phase == Phase.RELOCATING) set { it.copy(phase = it.back) }
             PcEvent.CancelReplant -> if (s.phase == Phase.RELOCATING) set { it.copy(phase = it.back) }
+            // cuts would be lost: ask first (D44); a lesson with no cuts yet starts over at once
             PcEvent.ResetLesson -> if (s.phase == Phase.SETTINGS && s.back.inLesson) {
-                setCuts(emptyList(), clearExplain = true)
-                set { it.copy(score = null, view = View.NOW, hints = false, phase = Phase.PLACING, placeSerial = it.placeSerial + 1) }
+                if (s.cuts.isEmpty()) resetLesson() else set { it.copy(confirm = Confirm.LESSON) }
             }
             PcEvent.AskResetAll -> if (s.phase == Phase.SETTINGS) set { it.copy(confirm = Confirm.RESET) }
             PcEvent.AskQuit -> if (s.phase == Phase.SETTINGS) set { it.copy(confirm = Confirm.QUIT) }
@@ -247,6 +247,7 @@ class PcViewModel(private val store: Store) : ViewModel() {
             PcEvent.ConfirmYes ->
                 when (s.confirm) {
                     Confirm.QUIT -> quit()
+                    Confirm.LESSON -> resetLesson()
                     Confirm.RESET -> {
                         store.resetProgress()
                         set { it.copy(confirm = null, phase = Phase.PICKER, records = records(), graduated = emptySet(), cuts = emptyList(), score = null, explain = null) }
@@ -348,6 +349,11 @@ class PcViewModel(private val store: Store) : ViewModel() {
                 records = records(), graduated = Species.entries.filter { sp -> store.graduated(sp) }.toSet(),
             )
         }
+    }
+
+    private fun resetLesson() {
+        setCuts(emptyList(), clearExplain = true)
+        set { it.copy(confirm = null, score = null, view = View.NOW, hints = false, phase = Phase.PLACING, placeSerial = it.placeSerial + 1) }
     }
 
     private fun quit() {

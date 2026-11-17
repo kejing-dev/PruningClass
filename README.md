@@ -1,6 +1,6 @@
 # 修枝课 Pruning Class
 
-> **v0.1.8 · 研发版（待 QA）**：选中的枝保留本色（不再整根变白），其余枝淡化但带标记的不淡（Build for QA · the selected branch keeps its own colour）
+> **v0.1.8 · 研发版（待 QA）**：选中的枝保留本色（不再整根变白），其余枝淡化但带标记的不淡；[重置本课] 有剪口时先确认（Build for QA · the selected branch keeps its own colour）
 
 **安装 / Install**（APK 在 [Release v0.1.7](https://github.com/kejing-dev/PruningClass/releases/tag/v0.1.7)）：
 

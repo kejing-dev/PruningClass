@@ -81,6 +81,7 @@ S = [
     ("action_clear", "Clear", "清空"), ("action_close", "Close", "关闭"), ("action_retry", "Retry", "重试"),
     ("action_reset_lesson", "Reset lesson", "重置本课"), ("action_reset_all", "Reset all progress", "重置全部进度"),
     ("confirm_quit", "Quit Pruning Class?", "退出修枝课？"), ("confirm_reset", "Clear all 6 scores and graduation?", "清空 6 课成绩和结业？"),
+    ("confirm_reset_lesson", "Start this lesson over? Your cuts are undone.", "这一课重来？剪过的都会撤回。"), ("action_start_over", "Start over", "重来"),
     ("view_now", "Now", "现在"), ("view_yours", "Yours", "你的明年"), ("view_model", "Model", "标准明年"),
     ("chip_cut", "Cut %1$d · %2$d to go", "剪了 %1$d · 还差 %2$d"), ("chip_cut_exam", "Cut %1$d", "已剪 %1$d"),
     ("chip_removed", "Removed %1$d%%", "去除 %1$d%%"),

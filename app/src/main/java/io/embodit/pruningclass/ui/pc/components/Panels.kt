@@ -537,11 +537,11 @@ internal fun SettingsPage(state: PcUiState, filled: Boolean, onEvent: (PcEvent) 
             // design S15b: the bottom of the page turns into the question + [Cancel] [Quit / Clear]
             val quit = state.confirm == Confirm.QUIT
             Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-                Title(if (quit) rs(R.string.confirm_quit) else rs(R.string.confirm_reset))
+                Title(rs(when (state.confirm) { Confirm.QUIT -> R.string.confirm_quit; Confirm.LESSON -> R.string.confirm_reset_lesson; else -> R.string.confirm_reset }))
             }
             Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Gap, Alignment.End)) {
                 WordButton("confirm_no", rs(R.string.action_cancel), { onEvent(PcEvent.ConfirmNo) }, minWidth = 140.dp, iconRes = R.drawable.ic_close)
-                WordButton("confirm_yes", if (quit) rs(R.string.action_quit_short) else rs(R.string.action_clear), { onEvent(PcEvent.ConfirmYes) }, danger = true, minWidth = 140.dp, iconRes = if (quit) R.drawable.ic_logout else R.drawable.ic_restart_alt)
+                WordButton("confirm_yes", rs(when (state.confirm) { Confirm.QUIT -> R.string.action_quit_short; Confirm.LESSON -> R.string.action_start_over; else -> R.string.action_clear }), { onEvent(PcEvent.ConfirmYes) }, danger = true, minWidth = 140.dp, iconRes = if (quit) R.drawable.ic_logout else R.drawable.ic_restart_alt)
             }
         }
     }

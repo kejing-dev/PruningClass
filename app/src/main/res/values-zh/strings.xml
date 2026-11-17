@@ -111,6 +111,8 @@
     <string name="action_reset_all">重置全部进度</string>
     <string name="confirm_quit">退出修枝课？</string>
     <string name="confirm_reset">清空 6 课成绩和结业？</string>
+    <string name="confirm_reset_lesson">这一课重来？剪过的都会撤回。</string>
+    <string name="action_start_over">重来</string>
     <string name="view_now">现在</string>
     <string name="view_yours">你的明年</string>
     <string name="view_model">标准明年</string>

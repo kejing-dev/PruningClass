@@ -33,7 +33,8 @@ controls a screen (lesson tab: Undo / Done / Hint / Turn 45; result tab: View / 
 16 dp; the app draws no controller ray any more (Full Space system ray, `RayPolicy`); settings has a How-to page; the tree
 drag adds up the per-event dragAmount (`DragTotal`). v0.1.8 (2026-11-16 headset feedback "不要整个都高亮白色"): the
 selected branch keeps its own wood / hint colour and is only lifted by emissive (`Highlight.LIFT` 15 %, HighlightTest);
-the other branches fade to 0.7 except those carrying a mark (hint orange, dead / diseased / canker wood). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
+the other branches fade to 0.7 except those carrying a mark (hint orange, dead / diseased / canker wood); settings
+[Reset lesson] asks first when cuts would be lost (D44, `Confirm.LESSON`). Self-tested on emulator-5560 (AVD Pico_Emulator_6_1_fresh).
 
 ## Structure
 

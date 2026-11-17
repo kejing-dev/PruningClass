@@ -37,7 +37,7 @@ enum class Phase(val id: String) {
 enum class View { NOW, YOURS, MODEL }
 
 /** Inline confirm inside the settings panel (S15b). */
-enum class Confirm { QUIT, RESET }
+enum class Confirm { QUIT, RESET, LESSON }
 
 /** The explain card's content (design `copy.explain`). */
 data class Explain(val reason: Reason?, val branch: Int, val wrong: Boolean, val canRejoin: Boolean, val serial: Int, val hintRule: String? = null)
